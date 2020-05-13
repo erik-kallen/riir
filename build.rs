@@ -11,7 +11,7 @@ fn main() {
         .file(src.join("tvm_file.c"))
         // .file(src.join("tvm_htab.c"))
         .file(src.join("tvm_lexer.c"))
-        .file(src.join("tvm_memory.c"))
+        // .file(src.join("tvm_memory.c"))
         .file(src.join("tvm_parser.c"))
         // .file(src.join("tvm_preprocessor.c"))
         .file(src.join("tvm_program.c"))

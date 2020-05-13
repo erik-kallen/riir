@@ -1,4 +1,5 @@
 #[allow(non_camel_case_types, non_snake_case, non_upper_case_globals)]
 pub mod ffi;
 pub mod htab;
+pub mod memory;
 pub mod preprocessor;
