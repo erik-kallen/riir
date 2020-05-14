@@ -38,6 +38,18 @@ impl Item {
 
         Item::opaque(opaque_value)
     }
+
+    pub(crate) fn opaque_value(self: &Item) -> &[u8] {
+        &self.opaque_value
+    }
+
+    pub(crate) fn opaque_value_str(self: &Item) -> Option<&str> {
+        unsafe {
+            CStr::from_ptr(self.opaque_value() as *const _ as *const _)
+                .to_str()
+                .ok()
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]
