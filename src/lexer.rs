@@ -265,4 +265,9 @@ mod tests {
             &[&["mov", "eax", "21"]],
         );
     }
+
+    #[test]
+    fn can_lex_lines_with_windows_line_endings() {
+        run_test("inc eax\r\ninc ebx", &[&["inc", "eax"], &["inc", "ebx"]]);
+    }
 }
