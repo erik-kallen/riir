@@ -2,7 +2,6 @@
 #include <tvm/tvm_file.h>
 #include <tvm/tvm_tokens.h>
 
-#include <unistd.h>
 #include <string.h>
 
 static int process_includes(
@@ -79,7 +78,7 @@ static int process_defines(
 	}
 
 	int length = (end - (begin + offset));
-	char tempstr[length + 1];
+	char *tempstr = _alloca(length + 1);
 
 	memset(tempstr, 0, length + 1);
 	memcpy(tempstr, begin + offset, length);
