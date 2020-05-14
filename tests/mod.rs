@@ -3,10 +3,9 @@ use std::{
     process::Command,
 };
 
-fn run(program: &str, expected_output: &str) {
-    let program_path = format!("vendor/tinyvm/programs/tinyvm/{}", program);
+fn run(program: &str, expected_output: &[i32]) {
     let output = Command::new("cargo")
-        .args(&["run", "--example", "tvmi", "--", &program_path])
+        .args(&["run", "--example", "tvmi", "--", program])
         .output()
         .expect(&format!("Failed to execute {}", program));
 
@@ -24,13 +23,43 @@ fn run(program: &str, expected_output: &str) {
         .unwrap()
         .replace("\r\n", "\n");
 
-    assert_eq!(result, expected_output);
+    let result: &str = &result;
+
+    let actual_output: Vec<i32> = result
+        .split("\n")
+        .filter(|s| s.len() > 0)
+        .map(|s| s.parse::<i32>().unwrap())
+        .collect();
+
+    assert_eq!(actual_output, expected_output);
+}
+
+fn run_vendor(program: &str, expected_output: &[i32]) {
+    run(
+        &format!("vendor/tinyvm/programs/tinyvm/{}", program),
+        expected_output,
+    );
+}
+
+fn run_local(program: &str, expected_output: &[i32]) {
+    run(&format!("tests/{}", program), expected_output);
 }
 
 #[test]
 fn fact() {
-    run(
+    run_vendor(
         "fact.vm",
-        "1\n2\n6\n24\n120\n720\n5040\n40320\n362880\n3628800\n",
+        &[1, 2, 6, 24, 120, 720, 5040, 40320, 362880, 3628800],
+    );
+}
+
+#[test]
+fn instructions() {
+    run_local(
+        "instructions.vm",
+        &[
+            1, 2, 1, 0, 2, 4, 2, 7, 1, 12, 3, 2, -5, 59, 4, 63, 20, 6, 2, 10, 11, 100, 102, 200,
+            202, 300, 301, 303, 401, 403, 500, 502, 503, 602, 603,
+        ],
     );
 }

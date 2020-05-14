@@ -1,0 +1,272 @@
+##
+## MOV
+##
+    mov eax, 1
+    prn eax
+# 1
+
+##
+## PUSH/POP
+##
+    push 2
+    pop eax
+    prn eax
+# 2
+
+##
+## CMP/PUSHF
+##
+    cmp 1, 1
+    pushf
+    pop eax
+    prn eax
+# 1
+    cmp 1, 2
+    pushf
+    pop eax
+    prn eax
+# 0
+    cmp 2, 1
+    pushf
+    pop eax
+    prn eax
+# 2
+
+##
+## INC
+##
+    mov eax, 3
+    inc eax
+    prn eax
+# 4
+
+##
+## DEC
+##
+    mov eax, 3
+    dec eax
+    prn eax
+# 2
+
+##
+## ADD
+##
+    mov eax, 4
+    add eax, 3
+    prn eax
+# 7
+
+##
+## SUB
+##
+    mov eax, 4
+    sub eax, 3
+    prn eax
+# 1
+
+##
+## MUL
+##
+    mov eax, 4
+    mul eax, 3
+    prn eax
+# 12
+
+##
+## DIV
+##
+    mov eax, 14
+    div eax, 4
+    prn eax
+# 3
+
+##
+## MOD/REM
+##
+    mov eax, 14
+    mod eax, 4
+    rem eax
+    prn eax
+# 2
+
+##
+## NOT
+##
+    mov eax, 4
+    not eax
+    prn eax
+# -5
+
+##
+## XOR
+##
+    mov eax, 31
+    xor eax, 36
+    prn eax
+# 59
+
+##
+## AND
+##
+    mov eax, 31
+    and eax, 36
+    prn eax
+# 4
+
+##
+## OR
+##
+    mov eax, 31
+    or eax, 36
+    prn eax
+# 63
+
+##
+## SHL
+##
+    mov eax, 5
+    shl eax, 2
+    prn eax
+# 20
+
+##
+## SHR
+##
+    mov eax, 27
+    shr eax, 2
+    prn eax
+# 6
+
+##
+## JMP
+##
+    jmp jmp_1
+    prn 1
+jmp_1:
+    prn 2
+# 2
+
+##
+## CALL/RET
+##
+    call call_1
+# 10
+    prn 11
+# 11
+
+##
+## JE
+##
+    cmp 1, 2
+    je je_1
+    prn 100
+# 100
+je_1:
+    cmp 1, 1
+    je je_2
+    prn 101
+je_2:
+    prn 102
+# 102
+
+##
+## JNE
+##
+    cmp 1, 1
+    jne jne_1
+    prn 200
+# 200
+jne_1:
+    cmp 1, 2
+    jne jne_2
+    prn 201
+jne_2:
+    prn 202
+# 202
+
+##
+## JG
+##
+    cmp 1, 1
+    jg jg_1
+    prn 300
+# 300
+jg_1:
+    cmp 1, 2
+    jg jg_2
+    prn 301
+# 301
+jg_2:
+    cmp 2, 1
+    jg jg_3
+    prn 302
+jg_3:
+    prn 303
+# 303
+
+##
+## JGE
+##
+    cmp 1, 1
+    jge jge_1
+    prn 400
+jge_1:
+    cmp 1, 2
+    jge jge_2
+    prn 401
+# 401
+jge_2:
+    cmp 2, 1
+    jge jge_3
+    prn 402
+jge_3:
+    prn 403
+# 403
+
+##
+## JL
+##
+    cmp 1, 1
+    jl jl_1
+    prn 500
+# 500
+jl_1:
+    cmp 1, 2
+    jl jl_2
+    prn 501
+jl_2:
+    cmp 2, 1
+    jl jl_3
+    prn 502
+# 502
+jl_3:
+    prn 503
+# 503
+
+##
+## JLE
+##
+    cmp 1, 1
+    jle jle_1
+    prn 600
+jle_1:
+    cmp 1, 2
+    jle jle_2
+    prn 601
+jle_2:
+    cmp 2, 1
+    jle jle_3
+    prn 602
+# 602
+jle_3:
+    prn 603
+# 603
+
+
+    jmp end
+
+call_1:
+    prn 10
+    ret
+
+end:
