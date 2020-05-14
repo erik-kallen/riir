@@ -3,3 +3,4 @@ pub mod ffi;
 pub mod htab;
 pub mod memory;
 pub mod preprocessor;
+pub mod program;
