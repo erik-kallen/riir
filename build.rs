@@ -15,7 +15,7 @@ fn main() {
         .file(src.join("tvm_parser.c"))
         // .file(src.join("tvm_preprocessor.c"))
         // .file(src.join("tvm_program.c"))
-        .file(src.join("tvm.c"))
+        // .file(src.join("tvm.c"))
         .include(include)
         .compile("tvm");
 }

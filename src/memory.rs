@@ -62,6 +62,14 @@ impl Memory {
         self.registers[0x6].pointer = pointer.offset(1);
         *pointer
     }
+
+    pub fn get_current_instruction_index(self: &Memory) -> isize {
+        unsafe { self.registers[0x8].value as isize }
+    }
+
+    pub fn set_current_instruction_index(self: &mut Memory, value: isize) {
+        self.registers[0x8].value = value as i32;
+    }
 }
 
 #[no_mangle]
