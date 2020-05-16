@@ -1,18 +1,20 @@
-use crate::ffi::{_strdup, strlen, free, tvm_htab_ctx, TOK_DEFINE, TOK_INCLUDE};
 use crate::htab::{HashTable, Item};
 use std::{
     collections::hash_map::Entry,
-    ffi::{CStr, CString},
+    ffi::{CString},
     io::Error,
-    os::raw::c_int,
+    os::raw::{c_int, c_void},
     str,
 };
+
+pub const TOK_INCLUDE: &str = "%include";
+pub const TOK_DEFINE: &str = "%define";
 
 #[no_mangle]
 pub(crate) unsafe extern "C" fn tvm_preprocess(
     src: *mut *mut ::std::os::raw::c_char,
     src_len: *mut ::std::os::raw::c_int,
-    defines: *mut tvm_htab_ctx,
+    defines: *mut c_void,
 ) -> c_int {
     if src.is_null() || (*src).is_null() || src_len.is_null() || defines.is_null() {
         return -1;
@@ -23,24 +25,24 @@ pub(crate) unsafe extern "C" fn tvm_preprocess(
 
     // convert the input string to an owned Rust string so it can be
     // preprocessed
-    let rust_src = match CStr::from_ptr(*src).to_str() {
+    let rust_src = match CString::from_raw(*src).to_str() {
         Ok(s) => s.to_string(),
         Err(_) => return -1,
     };
 
     match preprocess(rust_src, defines) {
         Ok(s) => {
-            free(*src as *mut _);
-
-            let preprocessed = CString::new(s).unwrap();
-            *src = _strdup(preprocessed.as_ptr());
-            *src_len = strlen(*src) as c_int;
+            *src_len = s.len() as c_int;
+            *src = CString::new(s).unwrap().into_raw();
 
             // returning 0 indicates success
             0
         }
         Err(_) => {
             // tell the caller "an error occurred"
+            *src_len = 0;
+            *src = CString::new("").unwrap().into_raw();
+
             -1
         }
     }
@@ -95,10 +97,7 @@ where
 fn process_includes(src: String) -> Result<(String, bool), PreprocessingError> {
     process_directive_line(
         src,
-        CStr::from_bytes_with_nul(TOK_INCLUDE)
-            .unwrap()
-            .to_str()
-            .unwrap(),
+        TOK_INCLUDE,
         |line| {
             std::fs::read_to_string(line).map_err(|e| PreprocessingError::FailedInclude {
                 name: line.to_string(),
@@ -114,10 +113,7 @@ fn process_defines(
 ) -> Result<(String, bool), PreprocessingError> {
     process_directive_line(
         src,
-        CStr::from_bytes_with_nul(TOK_DEFINE)
-            .unwrap()
-            .to_str()
-            .unwrap(),
+        TOK_DEFINE,
         |line| {
             parse_define(line, defines)?;
             Ok(String::from("\n"))
@@ -176,7 +172,7 @@ pub fn preprocess(mut src: String, defines: &mut HashTable) -> Result<String, Pr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{ffi, htab::HashTable};
+    use crate::htab::{HashTable, tvm_htab_create, tvm_htab_find_ref, tvm_htab_destroy};
     use std::{
         ffi::{CStr, CString},
         io::Write,
@@ -187,34 +183,32 @@ mod tests {
     fn find_all_defines() {
         let src = "%define true 1\nsome random text\n%define FOO_BAR -42\n";
         let original_length = src.len();
-        let src = CString::new(src).unwrap();
+        let mut src = CString::new(src).unwrap().into_raw();
 
         unsafe {
-            let mut src = _strdup(src.as_ptr());
             let mut len = original_length as c_int;
-            let defines = ffi::tvm_htab_create();
+            let defines = tvm_htab_create();
 
-            let ret = ffi::tvm_preprocess(&mut src, &mut len, defines);
+            let ret = tvm_preprocess(&mut src, &mut len, defines);
 
             assert_eq!(ret, 0);
 
-            let preprocessed = CStr::from_ptr(src).to_bytes();
-            let preprocessed = std::str::from_utf8(&preprocessed[..len as usize]).unwrap();
+            let preprocessed = CString::from_raw(src);
+            let preprocessed = preprocessed.to_str().unwrap();
 
             assert_eq!(preprocessed, "\nsome random text\n\n");
 
-            let true_define = ffi::tvm_htab_find_ref(defines, b"true\0".as_ptr().cast());
-            assert_ne!(true_define, std::ptr::null_mut());
+            let true_define = tvm_htab_find_ref(defines, b"true\0".as_ptr().cast());
+            assert_ne!(true_define, std::ptr::null());
             let got = CStr::from_ptr(true_define).to_str().unwrap();
             assert_eq!(got, "1");
 
-            let foo_bar = ffi::tvm_htab_find_ref(defines, b"FOO_BAR\0".as_ptr().cast());
-            assert_ne!(foo_bar, std::ptr::null_mut());
+            let foo_bar = tvm_htab_find_ref(defines, b"FOO_BAR\0".as_ptr().cast());
+            assert_ne!(foo_bar, std::ptr::null());
             let got = CStr::from_ptr(foo_bar).to_str().unwrap();
             assert_eq!(got, "-42");
 
-            ffi::tvm_htab_destroy(defines);
-            ffi::free(src.cast());
+            tvm_htab_destroy(defines);
         }
     }
 
@@ -241,25 +235,23 @@ mod tests {
         let top_level_src = TOP_LEVEL.replace("nested", nested_filename);
 
         unsafe {
+            let mut len = top_level_src.len() as c_int;
             let top_level_src = CString::new(top_level_src).unwrap();
-            let mut src = _strdup(top_level_src.as_ptr());
-            let mut len = strlen(src) as c_int;
-            let defines = ffi::tvm_htab_create();
+            let mut src = top_level_src.into_raw();
+            let defines = tvm_htab_create();
 
-            let ret = ffi::tvm_preprocess(&mut src, &mut len, defines);
+            let ret = tvm_preprocess(&mut src, &mut len, defines);
 
             assert_eq!(ret, 0);
 
-            let preprocessed = CStr::from_ptr(src).to_bytes();
-            let preprocessed = std::str::from_utf8(&preprocessed[..len as usize]).unwrap();
+            let preprocessed = CString::from_raw(src).into_string().unwrap();
 
             assert_eq!(
                 preprocessed,
                 "first line\nfirst nested\nreally nested\nlast nested\nlast line\n"
             );
 
-            ffi::tvm_htab_destroy(defines);
-            ffi::free(src.cast());
+            tvm_htab_destroy(defines);
         }
     }
 

@@ -1,11 +1,11 @@
 use crate::{
-    context::Context, ffi, htab::Item, instruction::{OpCode, Operand}, program::Program,
+    context::Context, htab::Item, instruction::{OpCode, Operand},
 };
 use std::{
     collections::{hash_map::Entry, HashMap},
     ffi::{CStr, CString},
-    mem::size_of,
-    os::raw::{c_char, c_int, c_ulonglong},
+    mem::forget,
+    os::raw::{c_char, c_int, c_void},
     pin::Pin,
     ptr,
 };
@@ -39,6 +39,8 @@ enum ParseLineError<'a> {
     UnexpectedToken(&'a str),
     InvalidInstruction(&'a str),
 }
+
+pub const NUM_ARGS: usize = 2;
 
 pub fn parse_labels<'a>(
     lines: &'a [Vec<&'a str>],
@@ -150,7 +152,7 @@ unsafe fn tvm_build_lines_vec<'a>(tokens: *mut *mut *const c_char) -> Vec<Vec<&'
 
 #[no_mangle]
 pub unsafe extern "C" fn tvm_parse_labels(
-    vm: *mut ffi::tvm_ctx,
+    vm: *mut c_void,
     tokens: *mut *mut *const c_char,
 ) -> c_int {
     let vm = &mut *(vm as *mut Context);
@@ -180,7 +182,7 @@ pub unsafe extern "C" fn tvm_parse_labels(
 
 #[no_mangle]
 pub unsafe extern "C" fn tvm_parse_program(
-    vm: *mut ffi::tvm_ctx,
+    vm: *mut c_void,
     tokens: *mut *mut *const c_char,
 ) -> c_int {
     let vm = &mut *(vm as *mut Context);
@@ -198,54 +200,34 @@ pub unsafe extern "C" fn tvm_parse_program(
     let program = Pin::get_unchecked_mut(Pin::as_mut(&mut vm.program));
 
     // Allocate and populate instructions
-    program.instructions =
-        ffi::malloc((size_of::<c_int>() * (instructions.len() + 1)) as c_ulonglong) as *mut _;
-    ptr::copy(
-        instructions
-            .iter()
-            .map(|inst| inst.0 as c_int)
-            .collect::<Vec<_>>()
-            .as_ptr(),
-        program.instructions,
-        instructions.len(),
-    );
-    *program.instructions.offset(instructions.len() as isize) = -1;
+    let mut instructions_vec: Vec<c_int> = Vec::with_capacity(instructions.len() + 1);
+
+    instructions_vec.extend(instructions.iter().map(|inst| inst.0 as c_int));
+    instructions_vec.push(-1);
 
     // Allocate and populate args
-    program.args =
-        ffi::malloc((size_of::<*mut *mut c_int>() * (instructions.len() + 1)) as c_ulonglong)
-            as *mut _;
+    let mut args: Vec<*mut *mut c_int> = Vec::with_capacity(instructions.len() + 1);
 
-    for (index, instruction) in instructions.iter().enumerate() {
-        let current_args: *mut *mut c_int = ffi::calloc(
-            size_of::<*mut c_int>() as c_ulonglong,
-            ffi::MAX_ARGS as c_ulonglong,
-        ) as *mut _;
+    let mut values: Vec<*mut c_int> = Vec::default();
+
+    for instruction in instructions.iter() {
+        let mut current_args: Vec<*mut c_int> = vec![ptr::null_mut(); NUM_ARGS];
 
         for (index, operand) in instruction.1.iter().enumerate() {
-            unsafe fn add_value(program: &mut Program, value: c_int) -> *mut c_int {
-                program.values = ffi::realloc(
-                    program.values as *mut _,
-                    (size_of::<*mut c_int>() * (program.num_values + 1) as usize) as c_ulonglong,
-                ) as *mut _;
-
-                let pointer = program.values.offset(program.num_values as isize);
-                *pointer = ffi::malloc(size_of::<i32>() as c_ulonglong) as *mut _;
-                **pointer = value;
-
-                program.num_values = program.num_values + 1;
-
-                *pointer
+            unsafe fn add_value(values: &mut Vec<*mut c_int>, value: c_int) -> *mut c_int {
+                let pointer = Box::into_raw(Box::new(value));
+                values.push(pointer);
+                pointer
             }
 
             let pointer = match operand {
                 OperandOrLabel::Operand(Operand::Register(reg)) => {
                     vm.memory.registers.as_ptr().offset(*reg as isize) as *mut c_int
-                }
+                },
                 OperandOrLabel::Operand(Operand::Address(addr)) => {
                     (vm.memory.mem_space_ptr as *mut c_int).offset(*addr as isize)
-                }
-                OperandOrLabel::Operand(Operand::Value(value)) => add_value(program, *value),
+                },
+                OperandOrLabel::Operand(Operand::Value(value)) => add_value(&mut values, *value),
                 OperandOrLabel::Label(label) => {
                     let value = program
                         .labels
@@ -253,18 +235,32 @@ pub unsafe extern "C" fn tvm_parse_program(
                         .get(&CString::new(*label).unwrap())
                         .map_or(0, |i| i.value());
 
-                    add_value(program, value)
-                }
+                    add_value(&mut values, value)
+                },
             };
 
-            *current_args.offset(index as isize) = pointer;
+            current_args[index] = pointer;
         }
 
-        *program.args.offset(index as isize) = current_args;
+        args.push(current_args.as_mut_ptr());
+
+        forget(current_args);
     }
-    *program.args.offset(instructions.len() as isize) = ptr::null_mut();
+
+    args.push(ptr::null_mut());
+
+    program.instructions = instructions_vec.as_mut_ptr();
+    program.args = args.as_mut_ptr();
+
+    values.shrink_to_fit();
+    program.values = values.as_mut_ptr();
+    program.num_values = values.capacity() as c_int;
 
     program.num_instructions = instructions.len() as c_int;
+
+    forget(instructions_vec);
+    forget(args);
+    forget(values);
 
     0
 }
@@ -273,7 +269,7 @@ pub unsafe extern "C" fn tvm_parse_program(
 mod tests {
     mod parse_labels {
         use super::super::*;
-        use crate::{context::Context, ffi, htab::HashTable, lexer::LexerContext};
+        use crate::{context::Context, htab::{HashTable, tvm_htab_find}, lexer::LexerContext};
         use std::ffi::CString;
 
         fn run(source: &str, expected_labels: Option<&[(&str, usize)]>) {
@@ -285,7 +281,7 @@ mod tests {
             unsafe {
                 let lexer = LexerContext::lex(source, &HashTable::default());
                 let mut vm = Context::new();
-                let result = ffi::tvm_parse_labels(&mut vm as *mut _ as *mut _, lexer.tokens_ptr);
+                let result = tvm_parse_labels(&mut vm as *mut _ as *mut _, lexer.tokens_ptr);
 
                 match expected_labels {
                     None => {
@@ -297,7 +293,7 @@ mod tests {
 
                         for expected_label in expected_labels {
                             assert_eq!(
-                                ffi::tvm_htab_find(
+                                tvm_htab_find(
                                     vm.program.label_htab_ptr,
                                     CString::new(expected_label.0).unwrap().as_ptr()
                                 ),
@@ -349,7 +345,7 @@ mod tests {
                     &HashTable::default(),
                 );
                 let mut vm = Context::new();
-                let result = ffi::tvm_parse_labels(&mut vm as *mut _ as *mut _, lexer.tokens_ptr);
+                let result = tvm_parse_labels(&mut vm as *mut _ as *mut _, lexer.tokens_ptr);
 
                 assert_eq!(result, 0);
                 assert_eq!(vm.program.start_instruction_index, 2)
@@ -370,8 +366,7 @@ mod tests {
     mod parse_program {
         use crate::{
             context::Context,
-            ffi,
-            htab::HashTable,
+            htab::{HashTable, tvm_htab_add},
             instruction::{OpCode, Register},
             lexer::LexerContext,
         };
@@ -380,6 +375,7 @@ mod tests {
             ptr::null_mut,
             slice,
         };
+        use super::super::*;
 
         #[test]
         fn parse_program_works() {
@@ -390,13 +386,13 @@ mod tests {
             let mut vm = Context::new();
 
             unsafe {
-                ffi::tvm_htab_add(
+                tvm_htab_add(
                     vm.program.label_htab_ptr,
                     b"label\0".as_ptr() as *const c_char,
                     2,
                 );
 
-                let result = ffi::tvm_parse_program(&mut vm as *mut _ as *mut _, lexer.tokens_ptr);
+                let result = tvm_parse_program(&mut vm as *mut _ as *mut _, lexer.tokens_ptr);
 
                 assert_eq!(result, 0);
 
@@ -420,25 +416,25 @@ mod tests {
                 assert_eq!(**vm.program.values.offset(2), 101);
 
                 assert_eq!(
-                    slice::from_raw_parts(*vm.program.args.offset(0), ffi::MAX_ARGS as usize),
+                    slice::from_raw_parts(*vm.program.args.offset(0), NUM_ARGS as usize),
                     [*vm.program.values, null_mut()]
                 );
                 assert_eq!(
-                    slice::from_raw_parts(*vm.program.args.offset(1), ffi::MAX_ARGS as usize),
+                    slice::from_raw_parts(*vm.program.args.offset(1), NUM_ARGS as usize),
                     [
                         &vm.memory.registers[Register::Eax as usize] as *const _ as *mut c_int,
                         *vm.program.values.offset(1),
                     ]
                 );
                 assert_eq!(
-                    slice::from_raw_parts(*vm.program.args.offset(2), ffi::MAX_ARGS as usize),
+                    slice::from_raw_parts(*vm.program.args.offset(2), NUM_ARGS as usize),
                     [
                         &vm.memory.registers[Register::Ebx as usize] as *const _ as *mut c_int,
                         null_mut(),
                     ]
                 );
                 assert_eq!(
-                    slice::from_raw_parts(*vm.program.args.offset(3), ffi::MAX_ARGS as usize),
+                    slice::from_raw_parts(*vm.program.args.offset(3), NUM_ARGS as usize),
                     [
                         &vm.memory.registers[Register::Eax as usize] as *const _ as *mut c_int,
                         *vm.program.values.offset(2),

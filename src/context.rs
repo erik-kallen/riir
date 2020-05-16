@@ -1,8 +1,9 @@
 use crate::{
-    ffi,
     htab::HashTable,
     instruction::OpCode::*,
+    lexer::{lexer_create, tvm_lex, tvm_lexer_destroy, LexerContext},
     memory::Memory,
+    parser::{tvm_parse_labels, tvm_parse_program},
     preprocessor::{preprocess, PreprocessingError},
     program::Program,
 };
@@ -10,17 +11,17 @@ use num_traits::FromPrimitive;
 use std::{
     ffi::{CStr, CString},
     fs,
-    os::raw::{c_char, c_int},
+    os::raw::{c_char, c_int, c_void},
     pin::Pin,
 };
 
-const MEMORY_SIZE: usize = ffi::MIN_MEMORY_SIZE as usize;
-const STACK_SIZE: usize = ffi::MIN_STACK_SIZE as usize;
+const MEMORY_SIZE: usize = 64 * 1024 * 1024; // 64 MB
+const STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB
 
 #[repr(C)]
 pub struct Context {
-    pub prog_ptr: *mut ffi::tvm_prog,
-    pub mem_ptr: *mut ffi::tvm_mem,
+    pub prog_ptr: *mut c_void,
+    pub mem_ptr: *mut c_void,
     pub program: Pin<Box<Program>>,
     pub memory: Pin<Box<Memory>>,
 }
@@ -47,10 +48,10 @@ impl Context {
 
         let context = Context {
             prog_ptr: unsafe {
-                Pin::get_unchecked_mut(program.as_mut()) as *mut Program as *mut ffi::tvm_prog
+                Pin::get_unchecked_mut(program.as_mut()) as *mut Program as *mut _
             },
             mem_ptr: unsafe {
-                Pin::get_unchecked_mut(memory.as_mut()) as *mut Memory as *mut ffi::tvm_mem
+                Pin::get_unchecked_mut(memory.as_mut()) as *mut Memory as *mut _
             },
             program,
             memory,
@@ -65,19 +66,21 @@ impl Context {
             let source = preprocess(source, defines)?;
 
             let source = CString::new(source).unwrap();
-            let lexer = ffi::lexer_create();
+            let lexer = lexer_create();
             let source_mut = source.into_raw();
-            ffi::tvm_lex(lexer, source_mut, self.program.defines_ptr);
+            tvm_lex(lexer, source_mut, self.program.defines_ptr);
             let _ = CString::from_raw(source_mut);
 
-            if ffi::tvm_parse_labels((self as *mut Context).cast(), (*lexer).tokens.cast()) != 0 {
+            let tokens_ptr = (*(lexer as *mut LexerContext)).tokens_ptr;
+
+            if tvm_parse_labels((self as *mut Context).cast(), tokens_ptr) != 0 {
                 return Err(InterpretingError::ParseLabelsError);
             }
-            if ffi::tvm_parse_program((self as *mut Context).cast(), (*lexer).tokens.cast()) != 0 {
+            if tvm_parse_program((self as *mut Context).cast(), tokens_ptr) != 0 {
                 return Err(InterpretingError::ParseProgramError);
             }
 
-            ffi::tvm_lexer_destroy(lexer);
+            tvm_lexer_destroy(lexer);
         }
 
         Ok(())
@@ -252,13 +255,13 @@ fn read_to_string_with_possible_extension(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_vm_create() -> *mut ffi::tvm_ctx {
+pub unsafe extern "C" fn tvm_vm_create() -> *mut c_void {
     let context = Box::new(Context::new());
-    Box::into_raw(context) as *mut ffi::tvm_ctx
+    Box::into_raw(context) as *mut c_void
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_vm_interpret(vm: *mut ffi::tvm_ctx, filename: *const c_char) -> c_int {
+pub unsafe extern "C" fn tvm_vm_interpret(vm: *mut c_void, filename: *const c_char) -> c_int {
     let vm = &mut *(vm as *mut Context);
     let filename = match CStr::from_ptr(filename).to_str() {
         Ok(f) => f,
@@ -277,21 +280,21 @@ pub unsafe extern "C" fn tvm_vm_interpret(vm: *mut ffi::tvm_ctx, filename: *cons
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_vm_run(vm: *mut ffi::tvm_ctx) {
+pub unsafe extern "C" fn tvm_vm_run(vm: *mut c_void) {
     let vm = &mut *(vm as *mut Context);
 
     vm.run();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_step(vm: *mut ffi::tvm_ctx, _instr_idx: *mut c_int) {
+pub unsafe extern "C" fn tvm_step(vm: *mut c_void, _instr_idx: *mut c_int) {
     let vm = &mut *(vm as *mut Context);
 
     vm.step();
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_vm_destroy(vm: *mut ffi::tvm_ctx) {
+pub unsafe extern "C" fn tvm_vm_destroy(vm: *mut c_void) {
     if vm.is_null() {
         return;
     }

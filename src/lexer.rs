@@ -1,7 +1,7 @@
-use crate::{ffi, htab::HashTable};
+use crate::{htab::HashTable};
 use std::{
     ffi::{CStr, CString},
-    os::raw::c_char,
+    os::raw::{c_char, c_void},
     ptr::{null, null_mut},
 };
 
@@ -99,14 +99,14 @@ impl LexerContext {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn lexer_create() -> *mut ffi::tvm_lexer_ctx {
+pub unsafe extern "C" fn lexer_create() -> *mut c_void {
     let result = Box::new(LexerContext::empty());
 
     Box::into_raw(result).cast()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_lexer_destroy(l: *mut ffi::tvm_lexer_ctx) {
+pub unsafe extern "C" fn tvm_lexer_destroy(l: *mut c_void) {
     if l.is_null() {
         return;
     }
@@ -117,9 +117,9 @@ pub unsafe extern "C" fn tvm_lexer_destroy(l: *mut ffi::tvm_lexer_ctx) {
 
 #[no_mangle]
 pub unsafe extern "C" fn tvm_lex(
-    lexer: *mut ffi::tvm_lexer_ctx,
+    lexer: *mut c_void,
     source: *mut c_char,
-    defines: *mut ffi::tvm_htab_ctx,
+    defines: *mut c_void,
 ) {
     let lexer = &mut *(lexer as *mut LexerContext);
     let defines = Box::from_raw(defines as *mut HashTable); // For some reason we take ownership of the defines and should drop it after lexing
@@ -132,8 +132,7 @@ pub unsafe extern "C" fn tvm_lex(
 mod tests {
     use super::*;
     use crate::{
-        ffi,
-        htab::{HashTable, Item},
+        htab::{HashTable, Item, tvm_htab_create, tvm_htab_add_ref},
     };
     use std::ffi::{CStr, CString};
 
@@ -177,12 +176,12 @@ mod tests {
         expected_tokens: &[&[&str]],
     ) {
         unsafe {
-            let lexer = ffi::lexer_create();
+            let lexer = lexer_create();
 
-            let defines_htab = ffi::tvm_htab_create();
+            let defines_htab = tvm_htab_create();
 
             for pair in defines.iter() {
-                ffi::tvm_htab_add_ref(
+                tvm_htab_add_ref(
                     defines_htab,
                     CString::new(pair.0).unwrap().as_ptr(),
                     CString::new(pair.1).unwrap().as_ptr().cast(),
@@ -191,14 +190,14 @@ mod tests {
             }
 
             let source = CString::new(source).unwrap().into_raw();
-            ffi::tvm_lex(lexer, source, defines_htab);
+            tvm_lex(lexer, source, defines_htab);
             drop(CString::from_raw(source));
 
             let mut actual = Vec::<Vec<&str>>::default();
 
             let mut line_index = 0;
             loop {
-                let line_pointer = *(*lexer).tokens.offset(line_index as isize);
+                let line_pointer = *(*(lexer as *const LexerContext)).tokens_ptr.offset(line_index as isize);
                 if line_pointer.is_null() {
                     break;
                 }
@@ -223,7 +222,7 @@ mod tests {
 
             assert_eq!(actual, expected_tokens);
 
-            ffi::tvm_lexer_destroy(lexer);
+            tvm_lexer_destroy(lexer);
         }
     }
 

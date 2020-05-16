@@ -1,8 +1,7 @@
 use crate::{
-    ffi::{size_t, tvm_mem, tvm_reg_u},
     instruction::Register,
 };
-use std::{convert::TryInto, marker::PhantomPinned, os::raw::c_int, pin::Pin, ptr::null_mut};
+use std::{convert::TryInto, marker::PhantomPinned, os::raw::{c_int, c_void}, pin::Pin, ptr::null_mut};
 
 const NUM_REGISTERS: usize = 17;
 
@@ -19,7 +18,7 @@ pub struct Memory {
     pub remainder: c_int,
     pub mem_space_ptr: *mut u8,
     pub mem_space_size: c_int,
-    pub registers_ptr: *mut tvm_reg_u,
+    pub registers_ptr: *mut c_void,
     pub mem_space: Vec<u8>,
     pub registers: [RegisterValue; NUM_REGISTERS],
     _pin: PhantomPinned,
@@ -76,14 +75,14 @@ impl Memory {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_mem_create(size: size_t) -> *mut tvm_mem {
+pub unsafe extern "C" fn tvm_mem_create(size: usize) -> *mut c_void {
     let mem = Memory::new(size.try_into().unwrap());
     let mem_inner = Pin::into_inner_unchecked(mem);
-    Box::into_raw(mem_inner) as *mut tvm_mem
+    Box::into_raw(mem_inner) as *mut _
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_mem_destroy(mem: *mut tvm_mem) {
+pub unsafe extern "C" fn tvm_mem_destroy(mem: *mut c_void) {
     if mem.is_null() {
         return;
     }
@@ -92,19 +91,19 @@ pub unsafe extern "C" fn tvm_mem_destroy(mem: *mut tvm_mem) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_stack_create(mem: *mut tvm_mem, size: size_t) {
+pub unsafe extern "C" fn tvm_stack_create(mem: *mut c_void, size: usize) {
     let mem = &mut *(mem as *mut Memory);
     mem.create_stack(size as usize);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_stack_push(mem: *mut tvm_mem, item: *mut ::std::os::raw::c_int) {
+pub unsafe extern "C" fn tvm_stack_push(mem: *mut c_void, item: *mut c_int) {
     let mem = &mut *(mem as *mut Memory);
     mem.push_stack(*item);
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_stack_pop(mem: *mut tvm_mem, dest: *mut ::std::os::raw::c_int) {
+pub unsafe extern "C" fn tvm_stack_pop(mem: *mut c_void, dest: *mut c_int) {
     let mem = &mut *(mem as *mut Memory);
     *dest = mem.pop_stack();
 }

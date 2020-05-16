@@ -1,8 +1,8 @@
 use crate::{
-    ffi::{free, tvm_htab_create, tvm_htab_ctx, tvm_prog},
-    htab::HashTable,
+    htab::{HashTable, tvm_htab_create},
+    parser::NUM_ARGS,
 };
-use std::{marker::PhantomPinned, os::raw::c_int, pin::Pin, ptr::null_mut};
+use std::{marker::PhantomPinned, os::raw::{c_int, c_void}, pin::Pin, ptr::null_mut};
 
 #[repr(C)]
 pub struct Program {
@@ -12,8 +12,8 @@ pub struct Program {
     pub args: *mut *mut *mut c_int,
     pub values: *mut *mut c_int,
     pub num_values: c_int,
-    pub defines_ptr: *mut tvm_htab_ctx,
-    pub label_htab_ptr: *mut tvm_htab_ctx,
+    pub defines_ptr: *mut c_void,
+    pub label_htab_ptr: *mut c_void,
     pub labels: HashTable, // For some reason, the labels are owned and should be freed by the Program but the defines are not (they are freed by the lexer)
     pin: PhantomPinned,
 }
@@ -46,9 +46,9 @@ impl Drop for Program {
         unsafe {
             if !self.values.is_null() {
                 for i in 0..self.num_values {
-                    free(*self.values.offset(i as isize) as *mut _);
+                    drop(Box::<c_int>::from_raw(*self.values.offset(i as isize) as *mut _));
                 }
-                free(self.values as *mut _);
+                drop(Vec::<*mut c_int>::from_raw_parts(self.values as *mut _, self.num_values as usize, self.num_values as usize));
             }
 
             if !self.args.is_null() {
@@ -58,28 +58,28 @@ impl Drop for Program {
                     if current_arg.is_null() {
                         break;
                     }
-                    free(current_arg as *mut _);
+                    drop(Vec::<*mut c_int>::from_raw_parts(current_arg, NUM_ARGS, NUM_ARGS));
                     i += 1;
                 }
-                free(self.args as *mut _);
+                drop(Vec::<*mut *mut c_int>::from_raw_parts(self.args, (self.num_instructions + 1) as usize, (self.num_instructions + 1) as usize));
             }
 
             if !self.instructions.is_null() {
-                free(self.instructions as *mut _);
+                drop(Vec::<c_int>::from_raw_parts(self.instructions, (self.num_instructions + 1) as usize, (self.num_instructions + 1) as usize));
             }
         }
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_prog_create() -> *mut tvm_prog {
+pub unsafe extern "C" fn tvm_prog_create() -> *mut c_void {
     let program = Program::new();
     let program_inner = Pin::into_inner_unchecked(program);
     Box::into_raw(program_inner) as *mut _
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_prog_destroy(p: *mut tvm_prog) {
+pub unsafe extern "C" fn tvm_prog_destroy(p: *mut c_void) {
     if p.is_null() {
         return;
     }

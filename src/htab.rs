@@ -1,4 +1,3 @@
-use crate::ffi::tvm_htab_ctx;
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
@@ -61,13 +60,13 @@ impl Item {
 pub struct HashTable(pub(crate) HashMap<CString, Item>);
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_htab_create() -> *mut tvm_htab_ctx {
+pub unsafe extern "C" fn tvm_htab_create() -> *mut c_void {
     let hashtable = Box::new(HashTable::default());
     Box::into_raw(hashtable).cast()
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_htab_destroy(htab: *mut tvm_htab_ctx) {
+pub unsafe extern "C" fn tvm_htab_destroy(htab: *mut c_void) {
     if htab.is_null() {
         return;
     }
@@ -78,7 +77,7 @@ pub unsafe extern "C" fn tvm_htab_destroy(htab: *mut tvm_htab_ctx) {
 
 #[no_mangle]
 pub unsafe extern "C" fn tvm_htab_add(
-    htab: *mut tvm_htab_ctx,
+    htab: *mut c_void,
     key: *const c_char,
     value: c_int,
 ) -> c_int {
@@ -92,7 +91,7 @@ pub unsafe extern "C" fn tvm_htab_add(
 
 #[no_mangle]
 pub unsafe extern "C" fn tvm_htab_add_ref(
-    htab: *mut tvm_htab_ctx,
+    htab: *mut c_void,
     key: *const c_char,
     valptr: *const c_void,
     len: c_int,
@@ -106,7 +105,7 @@ pub unsafe extern "C" fn tvm_htab_add_ref(
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_htab_find(htab: *mut tvm_htab_ctx, key: *const c_char) -> c_int {
+pub unsafe extern "C" fn tvm_htab_find(htab: *mut c_void, key: *const c_char) -> c_int {
     let hashtable = &*(htab as *mut HashTable);
     let key = CStr::from_ptr(key).to_owned();
 
@@ -118,7 +117,7 @@ pub unsafe extern "C" fn tvm_htab_find(htab: *mut tvm_htab_ctx, key: *const c_ch
 
 #[no_mangle]
 pub unsafe extern "C" fn tvm_htab_find_ref(
-    htab: *mut tvm_htab_ctx,
+    htab: *mut c_void,
     key: *const c_char,
 ) -> *const c_char {
     let hashtable = &*(htab as *mut HashTable);
