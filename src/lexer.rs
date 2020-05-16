@@ -90,6 +90,16 @@ impl LexerContext {
 
         self.tokens_ptr = self.tokens_ptr_storage_2.as_mut_ptr();
     }
+
+    pub fn lex(source: &str, defines: &HashTable) -> LexerContext {
+        let mut lexer = LexerContext::empty();
+        lexer.lex_into_self(source, defines);
+        lexer
+    }
+
+    pub fn tokens(self: &LexerContext) -> &Vec<Vec<CString>> {
+        &self.tokens
+    }
 }
 
 #[no_mangle]
