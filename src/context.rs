@@ -143,7 +143,7 @@ impl Context {
                     memory.push_stack(memory.flags);
                 }
                 Popf => {
-                    **args = memory.pop_stack();
+                    memory.flags = memory.pop_stack();
                 }
                 Inc => {
                     **args = **args + 1;

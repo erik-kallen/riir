@@ -33,6 +33,23 @@
 # 2
 
 ##
+## POPF
+##
+    cmp 1, 1
+    mov eax, 2
+    push eax
+    popf
+    jle popf_1
+    prn 20
+# 20
+popf_1:
+    jg popf_2
+    prn 21
+popf_2:
+    prn 22
+# 22
+
+##
 ## INC
 ##
     mov eax, 3
