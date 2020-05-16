@@ -1,9 +1,6 @@
 #[macro_use]
 extern crate lazy_static;
 
-#[macro_use]
-extern crate num_derive;
-
 pub mod context;
 pub mod htab;
 pub mod instruction;

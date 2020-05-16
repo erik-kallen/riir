@@ -1,4 +1,4 @@
-use crate::{htab::HashTable};
+use crate::htab::HashTable;
 use std::{
     ffi::{CStr, CString},
     os::raw::{c_char, c_void},
@@ -116,11 +116,7 @@ pub unsafe extern "C" fn tvm_lexer_destroy(l: *mut c_void) {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_lex(
-    lexer: *mut c_void,
-    source: *mut c_char,
-    defines: *mut c_void,
-) {
+pub unsafe extern "C" fn tvm_lex(lexer: *mut c_void, source: *mut c_char, defines: *mut c_void) {
     let lexer = &mut *(lexer as *mut LexerContext);
     let defines = Box::from_raw(defines as *mut HashTable); // For some reason we take ownership of the defines and should drop it after lexing
     let source = CStr::from_ptr(source).to_str().unwrap();
@@ -131,9 +127,7 @@ pub unsafe extern "C" fn tvm_lex(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        htab::{HashTable, Item, tvm_htab_create, tvm_htab_add_ref},
-    };
+    use crate::htab::{tvm_htab_add_ref, tvm_htab_create, HashTable, Item};
     use std::ffi::{CStr, CString};
 
     fn run_test(source: &str, expected_tokens: &[&[&str]]) {
@@ -197,7 +191,9 @@ mod tests {
 
             let mut line_index = 0;
             loop {
-                let line_pointer = *(*(lexer as *const LexerContext)).tokens_ptr.offset(line_index as isize);
+                let line_pointer = *(*(lexer as *const LexerContext))
+                    .tokens_ptr
+                    .offset(line_index as isize);
                 if line_pointer.is_null() {
                     break;
                 }

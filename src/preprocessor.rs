@@ -1,7 +1,7 @@
 use crate::htab::{HashTable, Item};
 use std::{
     collections::hash_map::Entry,
-    ffi::{CString},
+    ffi::CString,
     io::Error,
     os::raw::{c_int, c_void},
     str,
@@ -95,30 +95,22 @@ where
 }
 
 fn process_includes(src: String) -> Result<(String, bool), PreprocessingError> {
-    process_directive_line(
-        src,
-        TOK_INCLUDE,
-        |line| {
-            std::fs::read_to_string(line).map_err(|e| PreprocessingError::FailedInclude {
-                name: line.to_string(),
-                inner: e,
-            })
-        },
-    )
+    process_directive_line(src, TOK_INCLUDE, |line| {
+        std::fs::read_to_string(line).map_err(|e| PreprocessingError::FailedInclude {
+            name: line.to_string(),
+            inner: e,
+        })
+    })
 }
 
 fn process_defines(
     src: String,
     defines: &mut HashTable,
 ) -> Result<(String, bool), PreprocessingError> {
-    process_directive_line(
-        src,
-        TOK_DEFINE,
-        |line| {
-            parse_define(line, defines)?;
-            Ok(String::from("\n"))
-        },
-    )
+    process_directive_line(src, TOK_DEFINE, |line| {
+        parse_define(line, defines)?;
+        Ok(String::from("\n"))
+    })
 }
 
 fn parse_define(line: &str, defines: &mut HashTable) -> Result<(), PreprocessingError> {
@@ -172,7 +164,7 @@ pub fn preprocess(mut src: String, defines: &mut HashTable) -> Result<String, Pr
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::htab::{HashTable, tvm_htab_create, tvm_htab_find_ref, tvm_htab_destroy};
+    use crate::htab::{tvm_htab_create, tvm_htab_destroy, tvm_htab_find_ref, HashTable};
     use std::{
         ffi::{CStr, CString},
         io::Write,

@@ -1,13 +1,12 @@
 use crate::{
     htab::HashTable,
-    instruction::OpCode::*,
+    instruction::{Instruction, Source, Target},
     lexer::{lexer_create, tvm_lex, tvm_lexer_destroy, LexerContext},
     memory::Memory,
-    parser::{tvm_parse_labels, tvm_parse_program},
+    parser::old_interface::{tvm_parse_labels, tvm_parse_program},
     preprocessor::{preprocess, PreprocessingError},
     program::Program,
 };
-use num_traits::FromPrimitive;
 use std::{
     ffi::{CStr, CString},
     fs,
@@ -21,9 +20,8 @@ const STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB
 #[repr(C)]
 pub struct Context {
     pub prog_ptr: *mut c_void,
-    pub mem_ptr: *mut c_void,
     pub program: Pin<Box<Program>>,
-    pub memory: Pin<Box<Memory>>,
+    pub memory: Memory,
 }
 
 pub enum InterpretingError {
@@ -42,17 +40,10 @@ impl Context {
     pub fn new() -> Context {
         let mut program = Program::new();
         let mut memory = Memory::new(MEMORY_SIZE);
-        unsafe {
-            Pin::get_unchecked_mut(memory.as_mut()).create_stack(STACK_SIZE);
-        }
+        memory.create_stack(STACK_SIZE);
 
         let context = Context {
-            prog_ptr: unsafe {
-                Pin::get_unchecked_mut(program.as_mut()) as *mut Program as *mut _
-            },
-            mem_ptr: unsafe {
-                Pin::get_unchecked_mut(memory.as_mut()) as *mut Memory as *mut _
-            },
+            prog_ptr: unsafe { Pin::get_unchecked_mut(program.as_mut()) as *mut Program as *mut _ },
             program,
             memory,
         };
@@ -87,155 +78,170 @@ impl Context {
     }
 
     pub fn run(self: &mut Context) {
-        let memory = unsafe { Pin::get_unchecked_mut(Pin::as_mut(&mut self.memory)) };
-        memory.set_current_instruction_index(self.program.start_instruction_index as isize);
+        self.memory
+            .set_current_instruction_index(self.program.start_instruction_index);
 
         loop {
             let current_instruction_index = self.memory.get_current_instruction_index();
-            if current_instruction_index < 0
-                || current_instruction_index > self.program.num_instructions as isize
-            {
-                panic!("Tried to read instruction outside the program area");
-            }
 
-            if unsafe {
-                *self
-                    .program
-                    .instructions
-                    .offset(self.memory.get_current_instruction_index() as isize)
-            } == -1
-            {
+            if current_instruction_index == self.program.instructions.len() as i32 {
                 break;
             }
 
             self.step();
-
-            let memory = unsafe { Pin::get_unchecked_mut(Pin::as_mut(&mut self.memory)) };
-            memory.set_current_instruction_index(memory.get_current_instruction_index() + 1);
         }
     }
 
     pub fn step(self: &mut Context) {
         let instruction_index = self.memory.get_current_instruction_index();
 
-        if instruction_index < 0 || instruction_index >= self.program.num_instructions as isize {
+        if instruction_index < 0 || instruction_index >= self.program.instructions.len() as i32 {
             panic!("Tried to read instruction outside the program area");
         }
 
-        unsafe {
-            let args = *self
-                .program
-                .args
-                .offset(self.memory.get_current_instruction_index());
-            let memory = Pin::get_unchecked_mut(Pin::as_mut(&mut self.memory));
-
-            let instruction = *self.program.instructions.offset(instruction_index);
-            match FromPrimitive::from_i32(instruction).unwrap() {
-                Nop => {}
-                Int => { /* unimplemented */ }
-                Mov => {
-                    **args = **args.offset(1);
-                }
-                Push => {
-                    memory.push_stack(**args);
-                }
-                Pop => {
-                    **args = memory.pop_stack();
-                }
-                Pushf => {
-                    memory.push_stack(memory.flags);
-                }
-                Popf => {
-                    memory.flags = memory.pop_stack();
-                }
-                Inc => {
-                    **args = **args + 1;
-                }
-                Dec => {
-                    **args = **args - 1;
-                }
-                Add => {
-                    **args = **args + **args.offset(1);
-                }
-                Sub => {
-                    **args = **args - **args.offset(1);
-                }
-                Mul => {
-                    **args = **args * **args.offset(1);
-                }
-                Div => {
-                    **args = **args / **args.offset(1);
-                }
-                Mod => {
-                    memory.remainder = **args % **args.offset(1);
-                }
-                Rem => {
-                    **args = self.memory.remainder;
-                }
-                Not => {
-                    **args = !**args;
-                }
-                Xor => {
-                    **args = **args ^ **args.offset(1);
-                }
-                Or => {
-                    **args = **args | **args.offset(1);
-                }
-                And => {
-                    **args = **args & **args.offset(1);
-                }
-                Shl => {
-                    **args = **args << **args.offset(1);
-                }
-                Shr => {
-                    **args = **args >> **args.offset(1);
-                }
-                Cmp => {
-                    memory.flags = if **args == **args.offset(1) { 1 } else { 0 }
-                        | if **args > **args.offset(1) { 2 } else { 0 }
-                }
-                Jmp => memory.set_current_instruction_index((**args - 1) as isize),
-                Call => {
-                    memory.push_stack(instruction_index as i32);
-                    memory.set_current_instruction_index((**args - 1) as isize);
-                }
-                Ret => {
-                    let target = memory.pop_stack();
-                    memory.set_current_instruction_index(target as isize);
-                }
-                Je => {
-                    if memory.flags & 0x1 != 0 {
-                        memory.set_current_instruction_index((**args - 1) as isize);
-                    }
-                }
-                Jne => {
-                    if memory.flags & 0x1 == 0 {
-                        memory.set_current_instruction_index((**args - 1) as isize);
-                    }
-                }
-                Jg => {
-                    if memory.flags & 0x2 != 0 {
-                        memory.set_current_instruction_index((**args - 1) as isize);
-                    }
-                }
-                Jge => {
-                    if memory.flags & 0x3 != 0 {
-                        memory.set_current_instruction_index((**args - 1) as isize);
-                    }
-                }
-                Jl => {
-                    if memory.flags & 0x3 == 0 {
-                        memory.set_current_instruction_index((**args - 1) as isize);
-                    }
-                }
-                Jle => {
-                    if memory.flags & 0x2 == 0 {
-                        memory.set_current_instruction_index((**args - 1) as isize);
-                    }
-                }
-                Prn => println!("{}", **args),
+        macro_rules! read {
+            ($source:ident) => {
+                match $source {
+                    Source::Register(reg) => unsafe { self.memory.registers[reg as usize].value },
+                    Source::Value(value) => value,
+                    Source::Address(addr) => self.memory.mem_space[addr],
+                };
             };
         }
+
+        macro_rules! readt {
+            ($target:ident) => {
+                match $target {
+                    Target::Register(reg) => unsafe { self.memory.registers[reg as usize].value },
+                    Target::Address(addr) => self.memory.mem_space[addr],
+                }
+            };
+        }
+
+        macro_rules! write {
+            ($target:ident, $value:expr) => {
+                match $target {
+                    Target::Register(reg) => self.memory.registers[reg as usize].value = $value,
+                    Target::Address(addr) => self.memory.mem_space[addr] = $value,
+                };
+            };
+        }
+
+        macro_rules! jump {
+            ($source:ident) => {
+                self.memory
+                    .set_current_instruction_index(read!($source) - 1);
+            };
+            ($condition:expr, $source:ident) => {
+                if $condition {
+                    self.memory
+                        .set_current_instruction_index(read!($source) - 1);
+                }
+            };
+        }
+
+        match self.program.instructions[instruction_index as usize] {
+            Instruction::Nop => {}
+            Instruction::Int => { /* unimplemented */ }
+            Instruction::Mov(target, source) => {
+                write!(target, read!(source));
+            }
+            Instruction::Push(source) => {
+                let value = read!(source);
+                unsafe { self.memory.push_stack(value) };
+            }
+            Instruction::Pop(target) => {
+                write!(target, unsafe { self.memory.pop_stack() });
+            }
+            Instruction::Pushf => {
+                unsafe { self.memory.push_stack(self.memory.flags) };
+            }
+            Instruction::Popf => {
+                unsafe { self.memory.flags = self.memory.pop_stack() };
+            }
+            Instruction::Inc(target) => {
+                write!(target, readt!(target) + 1);
+            }
+            Instruction::Dec(target) => {
+                write!(target, readt!(target) - 1);
+            }
+            Instruction::Add(target, source) => {
+                write!(target, readt!(target) + read!(source));
+            }
+            Instruction::Sub(target, source) => {
+                write!(target, readt!(target) - read!(source));
+            }
+            Instruction::Mul(target, source) => {
+                write!(target, readt!(target) * read!(source));
+            }
+            Instruction::Div(target, source) => {
+                write!(target, readt!(target) / read!(source));
+            }
+            Instruction::Mod(source1, source2) => {
+                self.memory.remainder = read!(source1) % read!(source2);
+            }
+            Instruction::Rem(target) => {
+                write!(target, self.memory.remainder);
+            }
+            Instruction::Not(target) => {
+                write!(target, !readt!(target));
+            }
+            Instruction::Xor(target, source) => {
+                write!(target, readt!(target) ^ read!(source));
+            }
+            Instruction::Or(target, source) => {
+                write!(target, readt!(target) | read!(source));
+            }
+            Instruction::And(target, source) => {
+                write!(target, readt!(target) & read!(source));
+            }
+            Instruction::Shl(target, source) => {
+                write!(target, readt!(target) << read!(source));
+            }
+            Instruction::Shr(target, source) => {
+                write!(target, readt!(target) >> read!(source));
+            }
+            Instruction::Cmp(source1, source2) => {
+                let value1 = read!(source1);
+                let value2 = read!(source2);
+
+                self.memory.flags =
+                    if value1 == value2 { 1 } else { 0 } | if value1 > value2 { 2 } else { 0 }
+            }
+            Instruction::Jmp(source) => {
+                jump!(source);
+            }
+            Instruction::Call(source) => {
+                unsafe { self.memory.push_stack(instruction_index as i32) };
+                jump!(source);
+            }
+            Instruction::Ret => {
+                let target = unsafe { self.memory.pop_stack() };
+                self.memory.set_current_instruction_index(target);
+            }
+            Instruction::Je(source) => {
+                jump!(self.memory.flags & 0x1 != 0, source);
+            }
+            Instruction::Jne(source) => {
+                jump!(self.memory.flags & 0x1 == 0, source);
+            }
+            Instruction::Jg(source) => {
+                jump!(self.memory.flags & 0x2 != 0, source);
+            }
+            Instruction::Jge(source) => {
+                jump!(self.memory.flags & 0x3 != 0, source);
+            }
+            Instruction::Jl(source) => {
+                jump!(self.memory.flags & 0x3 == 0, source);
+            }
+            Instruction::Jle(source) => {
+                jump!(self.memory.flags & 0x2 == 0, source);
+            }
+            Instruction::Prn(source) => println!("{}", read!(source)),
+        };
+
+        self.memory
+            .set_current_instruction_index(self.memory.get_current_instruction_index() + 1);
     }
 }
 

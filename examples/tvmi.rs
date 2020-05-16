@@ -1,5 +1,5 @@
 use std::{env, ffi::CString, process::exit};
-use tinyvm::context::{tvm_vm_create, tvm_vm_interpret, tvm_vm_run, tvm_vm_destroy};
+use tinyvm::context::{tvm_vm_create, tvm_vm_destroy, tvm_vm_interpret, tvm_vm_run};
 
 fn main() {
     let filename = CString::new(env::args().nth(1).unwrap()).unwrap();

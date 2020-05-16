@@ -116,10 +116,7 @@ pub unsafe extern "C" fn tvm_htab_find(htab: *mut c_void, key: *const c_char) ->
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn tvm_htab_find_ref(
-    htab: *mut c_void,
-    key: *const c_char,
-) -> *const c_char {
+pub unsafe extern "C" fn tvm_htab_find_ref(htab: *mut c_void, key: *const c_char) -> *const c_char {
     let hashtable = &*(htab as *mut HashTable);
     let key = CStr::from_ptr(key).to_owned();
 
