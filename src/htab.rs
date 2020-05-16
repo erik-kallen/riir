@@ -49,10 +49,6 @@ impl Item {
                 .ok()
         }
     }
-
-    pub(crate) fn value(self: &Item) -> c_int {
-        self.value
-    }
 }
 
 #[derive(Debug, Default, Clone, PartialEq)]

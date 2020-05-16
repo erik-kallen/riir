@@ -3,14 +3,12 @@ use std::{os::raw::c_int, ptr::null_mut};
 
 const NUM_REGISTERS: usize = 17;
 
-#[repr(C)]
 #[derive(Copy, Clone)]
 pub union RegisterValue {
     pub value: i32,
     pub pointer: *mut i32,
 }
 
-#[repr(C)]
 pub struct Memory {
     pub flags: c_int,
     pub remainder: c_int,

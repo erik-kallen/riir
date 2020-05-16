@@ -23,13 +23,13 @@ pub enum Register {
 pub enum Source {
     Register(Register),
     Value(i32),
-    Address(usize),
+    Address(i32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Target {
     Register(Register),
-    Address(usize),
+    Address(i32),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]

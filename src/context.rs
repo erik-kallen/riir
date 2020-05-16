@@ -1,83 +1,82 @@
 use crate::{
     htab::HashTable,
     instruction::{Instruction, Source, Target},
-    lexer::{lexer_create, tvm_lex, tvm_lexer_destroy, LexerContext},
+    lexer::LexerContext,
     memory::Memory,
-    parser::old_interface::{tvm_parse_labels, tvm_parse_program},
+    parser::{parse, ParseError},
     preprocessor::{preprocess, PreprocessingError},
-    program::Program,
 };
 use std::{
-    ffi::{CStr, CString},
+    ffi::CStr,
     fs,
     os::raw::{c_char, c_int, c_void},
-    pin::Pin,
 };
 
 const MEMORY_SIZE: usize = 64 * 1024 * 1024; // 64 MB
 const STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB
 
-#[repr(C)]
+pub struct Program {
+    pub instructions: Vec<Instruction>,
+    pub start_instruction_index: i32,
+}
+
 pub struct Context {
-    pub prog_ptr: *mut c_void,
-    pub program: Pin<Box<Program>>,
+    pub program: Program,
     pub memory: Memory,
 }
 
-pub enum InterpretingError {
+#[derive(Debug)]
+pub enum LoadError {
     PreprocessingError(PreprocessingError),
-    ParseLabelsError,
-    ParseProgramError,
+    ParseError(ParseError),
 }
 
-impl From<PreprocessingError> for InterpretingError {
-    fn from(error: PreprocessingError) -> InterpretingError {
-        InterpretingError::PreprocessingError(error)
+#[derive(Debug, PartialEq)]
+pub enum ExecutionError {
+    InstructionOutOfRange(i32),
+    DataAddressOutOfRange(i32),
+}
+
+impl From<PreprocessingError> for LoadError {
+    fn from(error: PreprocessingError) -> LoadError {
+        LoadError::PreprocessingError(error)
+    }
+}
+
+impl From<ParseError> for LoadError {
+    fn from(error: ParseError) -> LoadError {
+        LoadError::ParseError(error)
     }
 }
 
 impl Context {
     pub fn new() -> Context {
-        let mut program = Program::new();
         let mut memory = Memory::new(MEMORY_SIZE);
         memory.create_stack(STACK_SIZE);
 
         let context = Context {
-            prog_ptr: unsafe { Pin::get_unchecked_mut(program.as_mut()) as *mut Program as *mut _ },
-            program,
+            program: Program {
+                instructions: vec![],
+                start_instruction_index: 0,
+            },
             memory,
         };
 
         context
     }
 
-    pub fn interpret(self: &mut Context, source: String) -> Result<(), InterpretingError> {
-        unsafe {
-            let defines = &mut *(self.program.defines_ptr as *mut HashTable);
-            let source = preprocess(source, defines)?;
+    pub fn load(self: &mut Context, source: String) -> Result<(), LoadError> {
+        let mut defines = HashTable::default();
+        let source = preprocess(source, &mut defines)?;
 
-            let source = CString::new(source).unwrap();
-            let lexer = lexer_create();
-            let source_mut = source.into_raw();
-            tvm_lex(lexer, source_mut, self.program.defines_ptr);
-            let _ = CString::from_raw(source_mut);
+        let lexer = LexerContext::lex(&source, &defines);
 
-            let tokens_ptr = (*(lexer as *mut LexerContext)).tokens_ptr;
-
-            if tvm_parse_labels((self as *mut Context).cast(), tokens_ptr) != 0 {
-                return Err(InterpretingError::ParseLabelsError);
-            }
-            if tvm_parse_program((self as *mut Context).cast(), tokens_ptr) != 0 {
-                return Err(InterpretingError::ParseProgramError);
-            }
-
-            tvm_lexer_destroy(lexer);
-        }
+        self.program = parse(&lexer.tokens())?;
 
         Ok(())
     }
 
-    pub fn run(self: &mut Context) {
+    pub fn run(self: &mut Context) -> Result<(), ExecutionError> {
         self.memory
             .set_current_instruction_index(self.program.start_instruction_index);
 
@@ -88,15 +87,17 @@ impl Context {
                 break;
             }
 
-            self.step();
+            self.step()?;
         }
+
+        Ok(())
     }
 
-    pub fn step(self: &mut Context) {
+    pub fn step(self: &mut Context) -> Result<(), ExecutionError> {
         let instruction_index = self.memory.get_current_instruction_index();
 
         if instruction_index < 0 || instruction_index >= self.program.instructions.len() as i32 {
-            panic!("Tried to read instruction outside the program area");
+            return Err(ExecutionError::InstructionOutOfRange(instruction_index));
         }
 
         macro_rules! read {
@@ -104,7 +105,12 @@ impl Context {
                 match $source {
                     Source::Register(reg) => unsafe { self.memory.registers[reg as usize].value },
                     Source::Value(value) => value,
-                    Source::Address(addr) => self.memory.mem_space[addr],
+                    Source::Address(addr) => {
+                        if addr < 0 || addr as usize >= self.memory.mem_space.len() {
+                            return Err(ExecutionError::DataAddressOutOfRange(addr));
+                        }
+                        self.memory.mem_space[addr as usize]
+                    }
                 };
             };
         }
@@ -113,7 +119,12 @@ impl Context {
             ($target:ident) => {
                 match $target {
                     Target::Register(reg) => unsafe { self.memory.registers[reg as usize].value },
-                    Target::Address(addr) => self.memory.mem_space[addr],
+                    Target::Address(addr) => {
+                        if addr < 0 || addr as usize >= self.memory.mem_space.len() {
+                            return Err(ExecutionError::DataAddressOutOfRange(addr));
+                        }
+                        self.memory.mem_space[addr as usize]
+                    }
                 }
             };
         }
@@ -122,7 +133,12 @@ impl Context {
             ($target:ident, $value:expr) => {
                 match $target {
                     Target::Register(reg) => self.memory.registers[reg as usize].value = $value,
-                    Target::Address(addr) => self.memory.mem_space[addr] = $value,
+                    Target::Address(addr) => {
+                        if addr < 0 || addr as usize >= self.memory.mem_space.len() {
+                            return Err(ExecutionError::DataAddressOutOfRange(addr));
+                        }
+                        self.memory.mem_space[addr as usize] = $value
+                    }
                 };
             };
         }
@@ -242,6 +258,8 @@ impl Context {
 
         self.memory
             .set_current_instruction_index(self.memory.get_current_instruction_index() + 1);
+
+        Ok(())
     }
 }
 
@@ -279,7 +297,7 @@ pub unsafe extern "C" fn tvm_vm_interpret(vm: *mut c_void, filename: *const c_ch
         Err(_) => return 1,
     };
 
-    match vm.interpret(source) {
+    match vm.load(source) {
         Ok(_) => 0,
         Err(_) => 1,
     }
@@ -289,14 +307,14 @@ pub unsafe extern "C" fn tvm_vm_interpret(vm: *mut c_void, filename: *const c_ch
 pub unsafe extern "C" fn tvm_vm_run(vm: *mut c_void) {
     let vm = &mut *(vm as *mut Context);
 
-    vm.run();
+    vm.run().unwrap();
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn tvm_step(vm: *mut c_void, _instr_idx: *mut c_int) {
     let vm = &mut *(vm as *mut Context);
 
-    vm.step();
+    vm.step().unwrap();
 }
 
 #[no_mangle]

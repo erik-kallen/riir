@@ -1,13 +1,10 @@
-use super::{
-    is_valid_label,
-    unresolved_instruction::{ParseInstructionError, UnresolvedInstruction},
-};
+use super::{is_valid_label, unresolved_instruction::UnresolvedInstruction, ParseErrorKind};
 
 #[derive(Debug, PartialEq)]
 pub(super) enum ParsedLineInstruction<'a> {
     Some(UnresolvedInstruction<'a>),
     None,
-    Err(ParseInstructionError<'a>),
+    Err(ParseErrorKind),
 }
 
 #[derive(Debug, PartialEq)]
@@ -42,9 +39,7 @@ pub(super) fn parse_line<'a>(tokens: &[&'a str]) -> ParsedLine<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::unresolved_instruction::{
-        ParseInstructionError, UnresolvedInstruction, UnresolvedSource,
-    };
+    use super::super::unresolved_instruction::{UnresolvedInstruction, UnresolvedSource};
     use super::{ParsedLineInstruction::*, *};
     use crate::instruction::{Register, Target};
 
@@ -126,32 +121,28 @@ mod tests {
         run(
             &["push", "label1:"],
             &[],
-            Err(ParseInstructionError::InvalidSource("label1:")),
+            Err(ParseErrorKind::InvalidOperand("label1:".to_owned())),
         );
         run(
             &["pop", "label1:"],
             &[],
-            Err(ParseInstructionError::InvalidTarget("label1:")),
+            Err(ParseErrorKind::InvalidOperand("label1:".to_owned())),
         );
         run(
             &["bad"],
             &[],
-            Err(ParseInstructionError::InvalidInstruction("bad")),
+            Err(ParseErrorKind::InvalidInstruction("bad".to_owned())),
         );
-        run(
-            &["add", "eax"],
-            &[],
-            Err(ParseInstructionError::MissingOperand(2)),
-        );
+        run(&["add", "eax"], &[], Err(ParseErrorKind::MissingOperand(2)));
         run(
             &["nop", "eax"],
             &[],
-            Err(ParseInstructionError::ExtraToken("eax")),
+            Err(ParseErrorKind::ExtraToken("eax".to_owned())),
         );
         run(
             &["inc", "eax", "ebx"],
             &[],
-            Err(ParseInstructionError::ExtraToken("ebx")),
+            Err(ParseErrorKind::ExtraToken("ebx".to_owned())),
         );
     }
 
@@ -160,7 +151,7 @@ mod tests {
         run(
             &["label1:", "bad"],
             &["label1"],
-            Err(ParseInstructionError::InvalidInstruction("bad")),
+            Err(ParseErrorKind::InvalidInstruction("bad".to_owned())),
         );
     }
 
@@ -169,7 +160,7 @@ mod tests {
         run(
             &["wef(#):", "inc", "eax"],
             &[],
-            Err(ParseInstructionError::InvalidInstruction("wef(#):")),
+            Err(ParseErrorKind::InvalidInstruction("wef(#):".to_owned())),
         );
     }
 }

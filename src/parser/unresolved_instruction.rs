@@ -1,4 +1,4 @@
-use super::{is_valid_label, register::parse_register};
+use super::{is_valid_label, register::parse_register, ParseErrorKind};
 use crate::instruction::{Register, Target};
 use std::num::ParseIntError;
 
@@ -6,7 +6,7 @@ use std::num::ParseIntError;
 pub(super) enum UnresolvedSource<'a> {
     Register(Register),
     Value(i32),
-    Address(usize),
+    Address(i32),
     Label(&'a str),
 }
 
@@ -46,15 +46,6 @@ pub(super) enum UnresolvedInstruction<'a> {
     Prn(UnresolvedSource<'a>),
 }
 
-#[derive(Debug, PartialEq)]
-pub(super) enum ParseInstructionError<'a> {
-    InvalidInstruction(&'a str),
-    MissingOperand(usize),
-    InvalidTarget(&'a str),
-    InvalidSource(&'a str),
-    ExtraToken(&'a str),
-}
-
 fn parse_value(value: &str) -> Result<i32, ParseIntError> {
     if value.ends_with("|h") {
         i32::from_str_radix(&value[0..value.len() - 2], 16)
@@ -73,14 +64,11 @@ fn parse_value(value: &str) -> Result<i32, ParseIntError> {
     }
 }
 
-fn parse_target<'a>(tokens: &[&'a str], index: usize) -> Result<Target, ParseInstructionError<'a>> {
+fn parse_target(tokens: &[&str], index: usize) -> Result<Target, ParseErrorKind> {
     match parse_source(tokens, index) {
         Ok(UnresolvedSource::Register(reg)) => Ok(Target::Register(reg)),
         Ok(UnresolvedSource::Address(addr)) => Ok(Target::Address(addr)),
-        Ok(_) => Err(ParseInstructionError::InvalidTarget(tokens[index])),
-        Err(ParseInstructionError::InvalidSource(s)) => {
-            Err(ParseInstructionError::InvalidTarget(s))
-        }
+        Ok(_) => Err(ParseErrorKind::InvalidOperand(tokens[index].to_owned())),
         Err(e) => Err(e),
     }
 }
@@ -88,10 +76,10 @@ fn parse_target<'a>(tokens: &[&'a str], index: usize) -> Result<Target, ParseIns
 fn parse_source<'a>(
     tokens: &[&'a str],
     index: usize,
-) -> Result<UnresolvedSource<'a>, ParseInstructionError<'a>> {
+) -> Result<UnresolvedSource<'a>, ParseErrorKind> {
     let token = tokens
         .get(index)
-        .ok_or(ParseInstructionError::MissingOperand(index))?;
+        .ok_or(ParseErrorKind::MissingOperand(index))?;
 
     if let Some(reg) = parse_register(token) {
         Ok(UnresolvedSource::Register(reg))
@@ -99,12 +87,12 @@ fn parse_source<'a>(
         match parse_value(token[1..token.len() - 1].trim()) {
             Ok(value) => {
                 if value >= 0 {
-                    Ok(UnresolvedSource::Address(value as usize))
+                    Ok(UnresolvedSource::Address(value))
                 } else {
-                    Err(ParseInstructionError::InvalidSource(token))
+                    Err(ParseErrorKind::InvalidOperand((*token).to_owned()))
                 }
             }
-            Err(_) => Err(ParseInstructionError::InvalidSource(token)),
+            Err(_) => Err(ParseErrorKind::InvalidOperand((*token).to_owned())),
         }
     } else {
         match parse_value(token) {
@@ -113,7 +101,7 @@ fn parse_source<'a>(
                 if is_valid_label(token) {
                     Ok(UnresolvedSource::Label(token))
                 } else {
-                    Err(ParseInstructionError::InvalidSource(token))
+                    Err(ParseErrorKind::InvalidOperand((*token).to_owned()))
                 }
             }
         }
@@ -123,7 +111,7 @@ fn parse_source<'a>(
 impl UnresolvedInstruction<'_> {
     pub(super) fn parse<'a>(
         tokens: &[&'a str],
-    ) -> Result<UnresolvedInstruction<'a>, ParseInstructionError<'a>> {
+    ) -> Result<UnresolvedInstruction<'a>, ParseErrorKind> {
         let mnemonic = tokens[0];
         let mut arg_number = 0;
 
@@ -147,7 +135,7 @@ impl UnresolvedInstruction<'_> {
                     return if tokens.len() == 1 {
                         Ok(UnresolvedInstruction::$instruction)
                     } else {
-                        Err(ParseInstructionError::ExtraToken(tokens[1]))
+                        Err(ParseErrorKind::ExtraToken(tokens[1].to_owned()))
                     }
                 }
             };
@@ -157,7 +145,7 @@ impl UnresolvedInstruction<'_> {
                     return if arg_number == tokens.len() - 1 {
                         Ok(result)
                     } else {
-                        Err(ParseInstructionError::ExtraToken(tokens[arg_number + 1]))
+                        Err(ParseErrorKind::ExtraToken(tokens[arg_number + 1].to_owned()))
                     }
                 }
             };
@@ -196,7 +184,7 @@ impl UnresolvedInstruction<'_> {
         instr!("jle", Jle, source);
         instr!("prn", Prn, source);
 
-        return Err(ParseInstructionError::InvalidInstruction(tokens[0]));
+        return Err(ParseErrorKind::InvalidInstruction(tokens[0].to_owned()));
     }
 }
 
@@ -209,7 +197,7 @@ mod tests {
         assert_eq!(UnresolvedInstruction::parse(&tokens).unwrap(), expected);
     }
 
-    fn run_error(source: &str, expected: ParseInstructionError) {
+    fn run_error(source: &str, expected: ParseErrorKind) {
         let tokens: Vec<_> = source.split(" ").collect();
         assert_eq!(
             UnresolvedInstruction::parse(&tokens).err().unwrap(),
@@ -290,17 +278,23 @@ mod tests {
 
     #[test]
     fn cannot_use_literal_as_target() {
-        run_error("pop 1", ParseInstructionError::InvalidTarget("1"));
+        run_error("pop 1", ParseErrorKind::InvalidOperand("1".to_owned()));
     }
 
     #[test]
     fn cannot_use_label_as_target() {
-        run_error("pop label", ParseInstructionError::InvalidTarget("label"));
+        run_error(
+            "pop label",
+            ParseErrorKind::InvalidOperand("label".to_owned()),
+        );
     }
 
     #[test]
     fn cannot_use_random_garbage_as_target() {
-        run_error("pop 23()C", ParseInstructionError::InvalidTarget("23()C"));
+        run_error(
+            "pop 23()C",
+            ParseErrorKind::InvalidOperand("23()C".to_owned()),
+        );
     }
 
     #[test]
@@ -376,6 +370,9 @@ mod tests {
 
     #[test]
     fn cannot_use_random_garbage_as_source() {
-        run_error("push 23()C", ParseInstructionError::InvalidSource("23()C"));
+        run_error(
+            "push 23()C",
+            ParseErrorKind::InvalidOperand("23()C".to_owned()),
+        );
     }
 }

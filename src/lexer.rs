@@ -1,25 +1,12 @@
 use crate::htab::HashTable;
-use std::{
-    ffi::{CStr, CString},
-    os::raw::{c_char, c_void},
-    ptr::{null, null_mut},
-};
+use std::ffi::CString;
 
 #[repr(C)]
-pub struct LexerContext {
-    // Next are what the C interface expects
-    source_lines_ptr: *const *const c_char,
-    pub tokens_ptr: *mut *mut *const c_char,
-
-    // Next are storage for the pointers we need for the C interface
-    tokens_ptr_storage_1: Vec<Vec<*const c_char>>,
-    tokens_ptr_storage_2: Vec<*mut *const c_char>,
-
-    // Next are real data
-    tokens: Vec<Vec<CString>>,
+pub struct LexerContext<'a> {
+    tokens: Vec<Vec<&'a str>>,
 }
 
-fn lex(source: &str, defines: &HashTable) -> Vec<Vec<CString>> {
+fn lex<'a>(source: &'a str, defines: &'a HashTable) -> Vec<Vec<&'a str>> {
     source
         .lines()
         .map(|line| {
@@ -29,7 +16,7 @@ fn lex(source: &str, defines: &HashTable) -> Vec<Vec<CString>> {
                 None => line,
             };
 
-            let line_tokens: Vec<CString> = line
+            let line_tokens: Vec<_> = line
                 .split(&[' ', '\t', ','][..])
                 .filter(|token| token.len() > 0)
                 .map(|token| {
@@ -41,7 +28,7 @@ fn lex(source: &str, defines: &HashTable) -> Vec<Vec<CString>> {
                         None => token,
                     };
 
-                    CString::new(token).unwrap()
+                    token
                 })
                 .collect();
 
@@ -50,100 +37,36 @@ fn lex(source: &str, defines: &HashTable) -> Vec<Vec<CString>> {
         .collect()
 }
 
-impl LexerContext {
-    fn empty() -> LexerContext {
-        LexerContext {
-            source_lines_ptr: null(),
-            tokens_ptr: null_mut(),
-            tokens_ptr_storage_1: vec![],
-            tokens_ptr_storage_2: vec![],
-            tokens: vec![],
-        }
+impl<'a> LexerContext<'a> {
+    fn empty() -> LexerContext<'a> {
+        LexerContext { tokens: vec![] }
     }
 
-    fn lex_into_self(self: &mut LexerContext, source: &str, defines: &HashTable) {
+    fn lex_into_self(self: &mut LexerContext<'a>, source: &'a str, defines: &'a HashTable) {
         self.tokens = lex(source, defines);
-
-        self.tokens_ptr_storage_1 = self
-            .tokens
-            .iter()
-            .map(|line| {
-                let mut line_vec: Vec<*const c_char> =
-                    line.iter().map(|token| token.as_ptr()).collect();
-
-                line_vec.push(null());
-                line_vec
-            })
-            .collect();
-
-        self.tokens_ptr_storage_2 = self
-            .tokens_ptr_storage_1
-            .iter_mut()
-            .map(|line| line.as_mut_ptr())
-            .collect();
-
-        self.tokens_ptr_storage_2.push(null_mut());
-
-        self.tokens_ptr = self.tokens_ptr_storage_2.as_mut_ptr();
     }
 
-    pub fn lex(source: &str, defines: &HashTable) -> LexerContext {
+    pub fn lex(source: &'a str, defines: &'a HashTable) -> LexerContext<'a> {
         let mut lexer = LexerContext::empty();
         lexer.lex_into_self(source, defines);
         lexer
     }
 
-    pub fn tokens(self: &LexerContext) -> &Vec<Vec<CString>> {
+    pub fn tokens(self: &LexerContext<'a>) -> &Vec<Vec<&str>> {
         &self.tokens
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn lexer_create() -> *mut c_void {
-    let result = Box::new(LexerContext::empty());
-
-    Box::into_raw(result).cast()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn tvm_lexer_destroy(l: *mut c_void) {
-    if l.is_null() {
-        return;
-    }
-
-    let l = Box::from_raw(l as *mut LexerContext);
-    drop(l);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn tvm_lex(lexer: *mut c_void, source: *mut c_char, defines: *mut c_void) {
-    let lexer = &mut *(lexer as *mut LexerContext);
-    let defines = Box::from_raw(defines as *mut HashTable); // For some reason we take ownership of the defines and should drop it after lexing
-    let source = CStr::from_ptr(source).to_str().unwrap();
-
-    lexer.lex_into_self(source, &*defines);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::htab::{tvm_htab_add_ref, tvm_htab_create, HashTable, Item};
-    use std::ffi::{CStr, CString};
+    use crate::htab::{HashTable, Item};
 
     fn run_test(source: &str, expected_tokens: &[&[&str]]) {
         run_test_with_defines(source, &[], expected_tokens);
     }
 
     fn run_test_with_defines(source: &str, defines: &[(&str, &str)], expected_tokens: &[&[&str]]) {
-        run_test_with_defines_in_rust(source, defines, expected_tokens);
-        run_test_with_defines_against_ffi(source, defines, expected_tokens);
-    }
-
-    fn run_test_with_defines_in_rust(
-        source: &str,
-        defines: &[(&str, &str)],
-        expected_tokens: &[&[&str]],
-    ) {
         let mut defines_htab = HashTable::default();
         for define in defines {
             defines_htab.0.insert(
@@ -152,74 +75,9 @@ mod tests {
             );
         }
 
-        let actual: Vec<Vec<String>> = lex(source, &defines_htab)
-            .iter()
-            .map(|line| {
-                line.iter()
-                    .map(|token| String::from(token.to_str().unwrap()))
-                    .collect()
-            })
-            .collect();
+        let actual: Vec<_> = lex(source, &defines_htab);
 
         assert_eq!(actual, expected_tokens);
-    }
-
-    fn run_test_with_defines_against_ffi(
-        source: &str,
-        defines: &[(&str, &str)],
-        expected_tokens: &[&[&str]],
-    ) {
-        unsafe {
-            let lexer = lexer_create();
-
-            let defines_htab = tvm_htab_create();
-
-            for pair in defines.iter() {
-                tvm_htab_add_ref(
-                    defines_htab,
-                    CString::new(pair.0).unwrap().as_ptr(),
-                    CString::new(pair.1).unwrap().as_ptr().cast(),
-                    (pair.1.len() + 1) as i32,
-                );
-            }
-
-            let source = CString::new(source).unwrap().into_raw();
-            tvm_lex(lexer, source, defines_htab);
-            drop(CString::from_raw(source));
-
-            let mut actual = Vec::<Vec<&str>>::default();
-
-            let mut line_index = 0;
-            loop {
-                let line_pointer = *(*(lexer as *const LexerContext))
-                    .tokens_ptr
-                    .offset(line_index as isize);
-                if line_pointer.is_null() {
-                    break;
-                }
-
-                let mut current_line = Vec::<&str>::default();
-                let mut token_index = 0;
-                loop {
-                    let token_pointer = *line_pointer.offset(token_index as isize);
-                    if token_pointer.is_null() {
-                        break;
-                    }
-
-                    current_line.push(CStr::from_ptr(token_pointer).to_str().unwrap());
-
-                    token_index = token_index + 1
-                }
-
-                actual.push(current_line);
-
-                line_index = line_index + 1;
-            }
-
-            assert_eq!(actual, expected_tokens);
-
-            tvm_lexer_destroy(lexer);
-        }
     }
 
     #[test]
