@@ -1,28 +1,24 @@
 use crate::{
     htab::HashTable,
-    instruction::{Instruction, Source, Target},
+    instruction::{Instruction, Register, Source, Target, NUM_REGISTERS},
     lexer::LexerContext,
-    memory::Memory,
     parser::{parse, ParseError},
     preprocessor::{preprocess, PreprocessingError},
 };
-use std::{
-    ffi::CStr,
-    fs,
-    os::raw::{c_char, c_int, c_void},
-};
 
-const MEMORY_SIZE: usize = 64 * 1024 * 1024; // 64 MB
-const STACK_SIZE: usize = 2 * 1024 * 1024; // 2 MB
+const MEMORY_SIZE: usize = 16 * 1024 * 1024; // 64 MB (8M i32)
+const STACK_SIZE: usize = 512 * 1024; // 2 MB (512k i32)
 
 pub struct Program {
     pub instructions: Vec<Instruction>,
     pub start_instruction_index: i32,
 }
 
-pub struct Context {
-    pub program: Program,
-    pub memory: Memory,
+pub struct Memory {
+    pub flags: i32,
+    pub remainder: i32,
+    pub mem_space: Vec<i32>,
+    pub registers: [i32; NUM_REGISTERS],
 }
 
 #[derive(Debug)]
@@ -49,67 +45,55 @@ impl From<ParseError> for LoadError {
     }
 }
 
-impl Context {
-    pub fn new() -> Context {
-        let mut memory = Memory::new(MEMORY_SIZE);
-        memory.create_stack(STACK_SIZE);
-
-        let context = Context {
-            program: Program {
-                instructions: vec![],
-                start_instruction_index: 0,
-            },
-            memory,
-        };
-
-        context
-    }
-
-    pub fn load(self: &mut Context, source: String) -> Result<(), LoadError> {
+impl Program {
+    pub fn load(source: String) -> Result<Program, LoadError> {
         let mut defines = HashTable::default();
         let source = preprocess(source, &mut defines)?;
 
         let lexer = LexerContext::lex(&source, &defines);
 
-        self.program = parse(&lexer.tokens())?;
+        let program = parse(&lexer.tokens())?;
 
-        Ok(())
+        Ok(program)
     }
 
-    pub fn run(self: &mut Context) -> Result<(), ExecutionError> {
-        self.memory
-            .set_current_instruction_index(self.program.start_instruction_index);
+    pub fn run(self: &Program) -> Result<(), ExecutionError> {
+        let mut memory = self.initialize();
 
         loop {
-            let current_instruction_index = self.memory.get_current_instruction_index();
-
-            if current_instruction_index == self.program.instructions.len() as i32 {
+            if !self.step(&mut memory)? {
                 break;
             }
-
-            self.step()?;
         }
 
         Ok(())
     }
 
-    pub fn step(self: &mut Context) -> Result<(), ExecutionError> {
-        let instruction_index = self.memory.get_current_instruction_index();
+    pub fn initialize(self: &Program) -> Memory {
+        let mut memory = Memory::new(MEMORY_SIZE, STACK_SIZE);
+        memory.registers[Register::Eip as usize] = self.start_instruction_index;
+        memory
+    }
 
-        if instruction_index < 0 || instruction_index >= self.program.instructions.len() as i32 {
+    pub fn step(self: &Program, memory: &mut Memory) -> Result<bool, ExecutionError> {
+        let instruction_index = memory.registers[Register::Eip as usize];
+
+        if instruction_index < 0 || instruction_index > self.instructions.len() as i32 {
             return Err(ExecutionError::InstructionOutOfRange(instruction_index));
+        } else if instruction_index == self.instructions.len() as i32 {
+            return Ok(false);
         }
 
         macro_rules! read {
             ($source:ident) => {
                 match $source {
-                    Source::Register(reg) => unsafe { self.memory.registers[reg as usize].value },
+                    Source::Register(reg) => memory.registers[reg as usize],
                     Source::Value(value) => value,
                     Source::Address(addr) => {
-                        if addr < 0 || addr as usize >= self.memory.mem_space.len() {
+                        if addr < 0 || addr as usize >= memory.mem_space.len() {
                             return Err(ExecutionError::DataAddressOutOfRange(addr));
                         }
-                        self.memory.mem_space[addr as usize]
+                        memory.mem_space[addr as usize]
                     }
                 };
             };
@@ -118,12 +102,12 @@ impl Context {
         macro_rules! readt {
             ($target:ident) => {
                 match $target {
-                    Target::Register(reg) => unsafe { self.memory.registers[reg as usize].value },
+                    Target::Register(reg) => memory.registers[reg as usize],
                     Target::Address(addr) => {
-                        if addr < 0 || addr as usize >= self.memory.mem_space.len() {
+                        if addr < 0 || addr as usize >= memory.mem_space.len() {
                             return Err(ExecutionError::DataAddressOutOfRange(addr));
                         }
-                        self.memory.mem_space[addr as usize]
+                        memory.mem_space[addr as usize]
                     }
                 }
             };
@@ -132,48 +116,69 @@ impl Context {
         macro_rules! write {
             ($target:ident, $value:expr) => {
                 match $target {
-                    Target::Register(reg) => self.memory.registers[reg as usize].value = $value,
+                    Target::Register(reg) => memory.registers[reg as usize] = $value,
                     Target::Address(addr) => {
-                        if addr < 0 || addr as usize >= self.memory.mem_space.len() {
+                        if addr < 0 || addr as usize >= memory.mem_space.len() {
                             return Err(ExecutionError::DataAddressOutOfRange(addr));
                         }
-                        self.memory.mem_space[addr as usize] = $value
+                        memory.mem_space[addr as usize] = $value;
                     }
                 };
             };
         }
 
+        let mut should_advance = true;
         macro_rules! jump {
             ($source:ident) => {
-                self.memory
-                    .set_current_instruction_index(read!($source) - 1);
+                memory.registers[Register::Eip as usize] = read!($source);
+                should_advance = false;
             };
             ($condition:expr, $source:ident) => {
                 if $condition {
-                    self.memory
-                        .set_current_instruction_index(read!($source) - 1);
+                    jump!($source);
                 }
             };
         }
 
-        match self.program.instructions[instruction_index as usize] {
+        macro_rules! push {
+            ($value:expr) => {
+                let addr = memory.registers[Register::Esp as usize] - 1;
+                if addr < 0 || addr as usize >= memory.mem_space.len() {
+                    return Err(ExecutionError::DataAddressOutOfRange(addr));
+                }
+                memory.mem_space[addr as usize] = $value;
+                memory.registers[Register::Esp as usize] = addr;
+            };
+        }
+
+        macro_rules! pop {
+            () => {{
+                let addr = memory.registers[Register::Esp as usize];
+                if addr < 0 || addr as usize >= memory.mem_space.len() {
+                    return Err(ExecutionError::DataAddressOutOfRange(addr));
+                }
+                memory.registers[Register::Esp as usize] = addr + 1;
+                memory.mem_space[addr as usize]
+            }};
+        }
+
+        match self.instructions[instruction_index as usize] {
             Instruction::Nop => {}
             Instruction::Int => { /* unimplemented */ }
             Instruction::Mov(target, source) => {
                 write!(target, read!(source));
             }
             Instruction::Push(source) => {
-                let value = read!(source);
-                unsafe { self.memory.push_stack(value) };
+                push!(read!(source));
             }
             Instruction::Pop(target) => {
-                write!(target, unsafe { self.memory.pop_stack() });
+                write!(target, pop!());
             }
             Instruction::Pushf => {
-                unsafe { self.memory.push_stack(self.memory.flags) };
+                push!(memory.flags);
             }
             Instruction::Popf => {
-                unsafe { self.memory.flags = self.memory.pop_stack() };
+                memory.flags = pop!();
             }
             Instruction::Inc(target) => {
                 write!(target, readt!(target) + 1);
@@ -194,10 +199,10 @@ impl Context {
                 write!(target, readt!(target) / read!(source));
             }
             Instruction::Mod(source1, source2) => {
-                self.memory.remainder = read!(source1) % read!(source2);
+                memory.remainder = read!(source1) % read!(source2);
             }
             Instruction::Rem(target) => {
-                write!(target, self.memory.remainder);
+                write!(target, memory.remainder);
             }
             Instruction::Not(target) => {
                 write!(target, !readt!(target));
@@ -221,109 +226,61 @@ impl Context {
                 let value1 = read!(source1);
                 let value2 = read!(source2);
 
-                self.memory.flags =
+                memory.flags =
                     if value1 == value2 { 1 } else { 0 } | if value1 > value2 { 2 } else { 0 }
             }
             Instruction::Jmp(source) => {
                 jump!(source);
             }
             Instruction::Call(source) => {
-                unsafe { self.memory.push_stack(instruction_index as i32) };
+                push!(instruction_index + 1);
                 jump!(source);
             }
             Instruction::Ret => {
-                let target = unsafe { self.memory.pop_stack() };
-                self.memory.set_current_instruction_index(target);
+                memory.registers[Register::Eip as usize] = pop!();
+                should_advance = false;
             }
             Instruction::Je(source) => {
-                jump!(self.memory.flags & 0x1 != 0, source);
+                jump!(memory.flags & 0x1 != 0, source);
             }
             Instruction::Jne(source) => {
-                jump!(self.memory.flags & 0x1 == 0, source);
+                jump!(memory.flags & 0x1 == 0, source);
             }
             Instruction::Jg(source) => {
-                jump!(self.memory.flags & 0x2 != 0, source);
+                jump!(memory.flags & 0x2 != 0, source);
             }
             Instruction::Jge(source) => {
-                jump!(self.memory.flags & 0x3 != 0, source);
+                jump!(memory.flags & 0x3 != 0, source);
             }
             Instruction::Jl(source) => {
-                jump!(self.memory.flags & 0x3 == 0, source);
+                jump!(memory.flags & 0x3 == 0, source);
             }
             Instruction::Jle(source) => {
-                jump!(self.memory.flags & 0x2 == 0, source);
+                jump!(memory.flags & 0x2 == 0, source);
             }
             Instruction::Prn(source) => println!("{}", read!(source)),
         };
 
-        self.memory
-            .set_current_instruction_index(self.memory.get_current_instruction_index() + 1);
+        if should_advance {
+            memory.registers[Register::Eip as usize] = instruction_index + 1;
+        }
 
-        Ok(())
+        Ok(true)
     }
 }
 
-fn read_to_string_with_possible_extension(
-    filename: &str,
-    extension: &str,
-) -> Result<String, std::io::Error> {
-    match fs::read_to_string(filename) {
-        Ok(s) => return Ok(s),
-        Err(error) => match error.kind() {
-            std::io::ErrorKind::NotFound => (),
-            _ => return Err(error),
-        },
-    };
+impl Memory {
+    pub fn new(size: usize, stack_size: usize) -> Memory {
+        let mut memory = Memory {
+            flags: 0,
+            remainder: 0,
+            mem_space: vec![0; size],
+            registers: [0; NUM_REGISTERS],
+        };
 
-    fs::read_to_string(filename.to_owned() + extension)
-}
+        memory.registers[Register::Esp as usize] = stack_size as i32;
+        memory.registers[Register::Ebp as usize] = stack_size as i32;
 
-#[no_mangle]
-pub unsafe extern "C" fn tvm_vm_create() -> *mut c_void {
-    let context = Box::new(Context::new());
-    Box::into_raw(context) as *mut c_void
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn tvm_vm_interpret(vm: *mut c_void, filename: *const c_char) -> c_int {
-    let vm = &mut *(vm as *mut Context);
-    let filename = match CStr::from_ptr(filename).to_str() {
-        Ok(f) => f,
-        Err(_) => return 1,
-    };
-
-    let source = match read_to_string_with_possible_extension(filename, ".vm") {
-        Ok(s) => s,
-        Err(_) => return 1,
-    };
-
-    match vm.load(source) {
-        Ok(_) => 0,
-        Err(_) => 1,
+        memory
     }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn tvm_vm_run(vm: *mut c_void) {
-    let vm = &mut *(vm as *mut Context);
-
-    vm.run().unwrap();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn tvm_step(vm: *mut c_void, _instr_idx: *mut c_int) {
-    let vm = &mut *(vm as *mut Context);
-
-    vm.step().unwrap();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn tvm_vm_destroy(vm: *mut c_void) {
-    if vm.is_null() {
-        return;
-    }
-
-    let vm = Box::from_raw(vm as *mut Context);
-
-    drop(vm);
 }

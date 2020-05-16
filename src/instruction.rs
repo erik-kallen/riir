@@ -19,6 +19,8 @@ pub enum Register {
     R15 = 16,
 }
 
+pub const NUM_REGISTERS: usize = 17;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Source {
     Register(Register),
