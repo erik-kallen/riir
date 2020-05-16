@@ -1,10 +1,10 @@
 use crate::{
-    htab::HashTable,
     instruction::{Instruction, Register, Source, Target, NUM_REGISTERS},
     lexer::LexerContext,
     parser::{parse, ParseError},
     preprocessor::{preprocess, PreprocessingError},
 };
+use std::collections::HashMap;
 
 const MEMORY_SIZE: usize = 16 * 1024 * 1024; // 64 MB (8M i32)
 const STACK_SIZE: usize = 512 * 1024; // 2 MB (512k i32)
@@ -47,7 +47,7 @@ impl From<ParseError> for LoadError {
 
 impl Program {
     pub fn load(source: String) -> Result<Program, LoadError> {
-        let mut defines = HashTable::default();
+        let mut defines = HashMap::<String, String>::default();
         let source = preprocess(source, &mut defines)?;
 
         let lexer = LexerContext::lex(&source, &defines);

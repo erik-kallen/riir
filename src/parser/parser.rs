@@ -116,12 +116,12 @@ pub(crate) fn parse<'a>(lines: &[Vec<&'a str>]) -> Result<Program, ParseError> {
 mod tests {
     use super::*;
     use crate::instruction::{Instruction, Register, Source, Target};
-    use crate::{htab::HashTable, lexer::LexerContext};
+    use crate::lexer::LexerContext;
 
     #[test]
     fn can_parse_with_resolved_labels() {
-        let htab = HashTable::default();
-        let lexer = LexerContext::lex("label1: add eax, ebx\njmp label4\nstart: inc ebx \n\ndec eax\nlabel2: sub eax, label1\nlabel3:\nlabel4:\ninc eax\njmp start\njmp label3", &htab);
+        let defines = HashMap::<String, String>::default();
+        let lexer = LexerContext::lex("label1: add eax, ebx\njmp label4\nstart: inc ebx \n\ndec eax\nlabel2: sub eax, label1\nlabel3:\nlabel4:\ninc eax\njmp start\njmp label3", &defines);
         let result = parse(&lexer.tokens()).unwrap();
 
         assert_eq!(
@@ -144,8 +144,8 @@ mod tests {
 
     #[test]
     fn start_instruction_index_is_set_to_the_start_label() {
-        let htab = HashTable::default();
-        let lexer = LexerContext::lex("label1: add eax, ebx\njmp label4\nstart: inc ebx \n\ndec eax\nlabel2: sub eax, label1\nlabel3:\nlabel4:\ninc eax\njmp start\njmp label3", &htab);
+        let defines = HashMap::<String, String>::default();
+        let lexer = LexerContext::lex("label1: add eax, ebx\njmp label4\nstart: inc ebx \n\ndec eax\nlabel2: sub eax, label1\nlabel3:\nlabel4:\ninc eax\njmp start\njmp label3", &defines);
         let result = parse(&lexer.tokens()).unwrap();
 
         assert_eq!(result.start_instruction_index, 2);
@@ -153,8 +153,8 @@ mod tests {
 
     #[test]
     fn start_instruction_index_is_zero_if_no_start_label_exists() {
-        let htab = HashTable::default();
-        let lexer = LexerContext::lex("label1: add eax, ebx\njmp label4\ninc ebx \n\ndec eax\nlabel2: sub eax, label1\nlabel3:\nlabel4:\ninc eax", &htab);
+        let defines = HashMap::<String, String>::default();
+        let lexer = LexerContext::lex("label1: add eax, ebx\njmp label4\ninc ebx \n\ndec eax\nlabel2: sub eax, label1\nlabel3:\nlabel4:\ninc eax", &defines);
         let result = parse(&lexer.tokens()).unwrap();
 
         assert_eq!(result.start_instruction_index, 0);
@@ -162,10 +162,10 @@ mod tests {
 
     #[test]
     fn returns_duplicate_definition_error_if_a_label_is_defined_twice() {
-        let htab = HashTable::default();
+        let defines = HashMap::<String, String>::default();
         let lexer = LexerContext::lex(
             "label1: add eax, ebx\n\nlabel1: inc ebx\nlabel2: dec eax",
-            &htab,
+            &defines,
         );
         let result = parse(&lexer.tokens());
 
@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn returns_undefined_error_if_a_label_is_not_defined() {
-        let htab = HashTable::default();
-        let lexer = LexerContext::lex("inc eax\n\njmp label1", &htab);
+        let defines = HashMap::<String, String>::default();
+        let lexer = LexerContext::lex("inc eax\n\njmp label1", &defines);
         let result = parse(&lexer.tokens());
 
         match result {
@@ -195,8 +195,8 @@ mod tests {
 
     #[test]
     fn parse_errors_are_correctly_returned() {
-        let htab = HashTable::default();
-        let lexer = LexerContext::lex("inc eax\n\nbad", &htab);
+        let defines = HashMap::<String, String>::default();
+        let lexer = LexerContext::lex("inc eax\n\nbad", &defines);
         let result = parse(&lexer.tokens());
 
         match result {

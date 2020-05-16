@@ -1,58 +1,42 @@
-use crate::htab::HashTable;
-use std::ffi::CString;
+use std::collections::HashMap;
 
 #[repr(C)]
 pub struct LexerContext<'a> {
     tokens: Vec<Vec<&'a str>>,
 }
 
-fn lex<'a>(source: &'a str, defines: &'a HashTable) -> Vec<Vec<&'a str>> {
-    source
-        .lines()
-        .map(|line| {
-            // Ignore everything after comment
-            let line = match line.find("#") {
-                Some(i) => line.split_at(i).0,
-                None => line,
-            };
-
-            let line_tokens: Vec<_> = line
-                .split(&[' ', '\t', ','][..])
-                .filter(|token| token.len() > 0)
-                .map(|token| {
-                    let token = match defines.0.get(&CString::new(token).unwrap()) {
-                        Some(item) => match item.opaque_value_str() {
+impl<'a> LexerContext<'a> {
+    pub fn lex(source: &'a str, defines: &'a HashMap<String, String>) -> LexerContext<'a> {
+        let tokens = source
+            .lines()
+            .map(|line| {
+                // Ignore everything after comment
+                let line = match line.find("#") {
+                    Some(i) => line.split_at(i).0,
+                    None => line,
+                };
+    
+                let line_tokens: Vec<_> = line
+                    .split(&[' ', '\t', ','][..])
+                    .filter(|token| token.len() > 0)
+                    .map(|token| {
+                        let token = match defines.get(token) {
                             Some(value) => value,
                             None => token,
-                        },
-                        None => token,
-                    };
+                        };
+    
+                        token
+                    })
+                    .collect();
+    
+                line_tokens
+            })
+            .collect();
 
-                    token
-                })
-                .collect();
-
-            line_tokens
-        })
-        .collect()
-}
-
-impl<'a> LexerContext<'a> {
-    fn empty() -> LexerContext<'a> {
-        LexerContext { tokens: vec![] }
+        LexerContext { tokens }
     }
 
-    fn lex_into_self(self: &mut LexerContext<'a>, source: &'a str, defines: &'a HashTable) {
-        self.tokens = lex(source, defines);
-    }
-
-    pub fn lex(source: &'a str, defines: &'a HashTable) -> LexerContext<'a> {
-        let mut lexer = LexerContext::empty();
-        lexer.lex_into_self(source, defines);
-        lexer
-    }
-
-    pub fn tokens(self: &LexerContext<'a>) -> &Vec<Vec<&str>> {
+    pub fn tokens(self: &LexerContext<'a>) -> &[Vec<&str>] {
         &self.tokens
     }
 }
@@ -60,24 +44,20 @@ impl<'a> LexerContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::htab::{HashTable, Item};
 
     fn run_test(source: &str, expected_tokens: &[&[&str]]) {
         run_test_with_defines(source, &[], expected_tokens);
     }
 
     fn run_test_with_defines(source: &str, defines: &[(&str, &str)], expected_tokens: &[&[&str]]) {
-        let mut defines_htab = HashTable::default();
+        let mut defines_htab = HashMap::<String, String>::default();
         for define in defines {
-            defines_htab.0.insert(
-                CString::new(define.0).unwrap(),
-                Item::opaque(CString::new(define.1).unwrap()),
-            );
+            defines_htab.insert(define.0.to_owned(), define.1.to_owned());
         }
 
-        let actual: Vec<_> = lex(source, &defines_htab);
+        let actual = LexerContext::lex(source, &defines_htab);
 
-        assert_eq!(actual, expected_tokens);
+        assert_eq!(actual.tokens, expected_tokens);
     }
 
     #[test]
