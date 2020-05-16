@@ -49,11 +49,15 @@ prn 0x12d
 prn 0x12E
 prn 12f|h
 prn 100110000|b
+prn 131h
+prn 100110010b
 
 prn -300
 prn -0x12d
 prn -0x12E
 prn -12f|h
 prn -100110000|b
+prn -131h
+prn -100110010b
 
 prn label

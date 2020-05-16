@@ -1,11 +1,14 @@
-use crate::ffi::{size_t, tvm_mem, tvm_reg_u};
+use crate::{
+    ffi::{size_t, tvm_mem, tvm_reg_u},
+    instruction::Register,
+};
 use std::{convert::TryInto, marker::PhantomPinned, os::raw::c_int, pin::Pin, ptr::null_mut};
 
 const NUM_REGISTERS: usize = 17;
 
 #[repr(C)]
 #[derive(Copy, Clone)]
-pub union Register {
+pub union RegisterValue {
     pub value: i32,
     pub pointer: *mut i32,
 }
@@ -18,7 +21,7 @@ pub struct Memory {
     pub mem_space_size: c_int,
     pub registers_ptr: *mut tvm_reg_u,
     pub mem_space: Vec<u8>,
-    pub registers: [Register; NUM_REGISTERS],
+    pub registers: [RegisterValue; NUM_REGISTERS],
     _pin: PhantomPinned,
 }
 
@@ -31,7 +34,7 @@ impl Memory {
             mem_space_size: size as c_int,
             registers_ptr: null_mut(),
             mem_space: vec![0; size],
-            registers: [Register {
+            registers: [RegisterValue {
                 pointer: null_mut(),
             }; NUM_REGISTERS],
             _pin: PhantomPinned,
@@ -47,28 +50,28 @@ impl Memory {
 
     pub fn create_stack(self: &mut Memory, size: usize) {
         let pointer = unsafe { self.mem_space.as_mut_ptr().offset(size as isize) as *mut i32 };
-        self.registers[0x6].pointer = pointer;
-        self.registers[0x7].pointer = pointer;
+        self.registers[Register::Esp as usize].pointer = pointer;
+        self.registers[Register::Ebp as usize].pointer = pointer;
     }
 
     pub unsafe fn push_stack(self: &mut Memory, item: c_int) {
-        let pointer = self.registers[0x6].pointer.offset(-1);
-        self.registers[0x6].pointer = pointer;
+        let pointer = self.registers[Register::Esp as usize].pointer.offset(-1);
+        self.registers[Register::Esp as usize].pointer = pointer;
         *pointer = item;
     }
 
     pub unsafe fn pop_stack(self: &mut Memory) -> c_int {
-        let pointer = self.registers[0x6].pointer;
-        self.registers[0x6].pointer = pointer.offset(1);
+        let pointer = self.registers[Register::Esp as usize].pointer;
+        self.registers[Register::Esp as usize].pointer = pointer.offset(1);
         *pointer
     }
 
     pub fn get_current_instruction_index(self: &Memory) -> isize {
-        unsafe { self.registers[0x8].value as isize }
+        unsafe { self.registers[Register::Eip as usize].value as isize }
     }
 
     pub fn set_current_instruction_index(self: &mut Memory, value: isize) {
-        self.registers[0x8].value = value as i32;
+        self.registers[Register::Eip as usize].value = value as i32;
     }
 }
 

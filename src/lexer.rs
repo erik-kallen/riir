@@ -71,10 +71,6 @@ impl LexerContext {
                 let mut line_vec: Vec<*const c_char> =
                     line.iter().map(|token| token.as_ptr()).collect();
 
-                // A little strange that we need to do this, but the parser will assume that it can use this many tokens, even if there is a null token before it
-                while line_vec.len() < ffi::MAX_TOKENS as usize {
-                    line_vec.push(null());
-                }
                 line_vec.push(null());
                 line_vec
             })
